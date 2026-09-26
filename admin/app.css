@@ -390,3 +390,47 @@ fieldset.xtra legend{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-
 .fgrid.pk{padding:0 18px 18px;overflow-y:auto;grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
 .modal .filters input[type=search]{flex:1 1 180px}
 .modal .filters select{width:auto}
+
+/* ---------- calendar ---------- */
+.calwrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+@media (max-width:1100px){.calwrap{grid-template-columns:1fr}}
+.legend{display:flex;gap:14px;font-size:12px;font-weight:400;color:var(--t2)}
+.legend i{display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:0}
+.legend .k-social,.calit.k-social{--k:var(--coral)}
+.legend .k-email,.calit.k-email{--k:var(--good)}
+.legend i{background:var(--k)}
+.calgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.calhd{font-size:10.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);padding:8px 10px;border-bottom:1px solid var(--line)}
+.calday{min-height:112px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px 6px 8px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.calday:nth-child(7n+7){border-right:0}
+.calday.out{background:var(--soft)}
+.calday.out .dn{color:var(--t3)}
+.calday.past .calit{opacity:.8}
+.calday.over{background:var(--soft);box-shadow:inset 0 0 0 2px var(--coral)}
+.dn{font-size:12px;font-weight:600;padding:0 4px;font-variant-numeric:tabular-nums}
+.dn .dw{display:none}
+.calday.today .dn{background:var(--coral);color:var(--on-coral);align-self:flex-start;padding:1px 6px}
+.calit{display:block;font-size:11.5px;line-height:1.35;padding:3px 6px;border-left:3px solid var(--k);background:var(--soft);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t1)}
+.calit b{font-weight:600;font-variant-numeric:tabular-nums}
+.calit[draggable="true"]{cursor:grab}
+.calit.dragging{opacity:.4}
+.calit.st-published,.calit.st-sent{background:transparent;color:var(--t2)}
+.calit.st-failed,.calit.st-partial{border-left-color:var(--danger)}
+@media (max-width:760px){
+  .calgrid{grid-template-columns:1fr}
+  .calhd{display:none}
+  .calday{min-height:0;border-right:0}
+  .calday.out,.calday:not(:has(.calit)):not(.today){display:none}
+  .dn .dw{display:inline;margin-left:6px;font-weight:400;color:var(--t3)}
+}
+/* posting times */
+.slots{display:flex;flex-direction:column;border:1px solid var(--line)}
+.slotrow{display:flex;align-items:center;gap:14px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.slotrow:last-child{border-bottom:0}
+.slotrow b{font-variant-numeric:tabular-nums;min-width:48px}
+.slotrow .btn{margin-left:auto}
+.daydots{display:flex;gap:4px}
+.dd{width:30px;height:28px;border:1px solid var(--line2);background:var(--field);font-size:11.5px;cursor:pointer;color:var(--t2);padding:0}
+.dd[aria-pressed="true"]{background:var(--t1);border-color:var(--t1);color:var(--bg);font-weight:600}
+input[type=time]{background:var(--field);border:1px solid var(--line2);padding:6px 10px;font-size:13.5px;color:var(--t1)}
+.calday.today .dn .dw{color:inherit}

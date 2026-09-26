@@ -157,6 +157,7 @@ export async function getSettings(env: Env): Promise<Record<string, string>> {
     postal_address: "",
     consent_text: "I’d like to get emails about this. I can unsubscribe any time.",
     double_optin: "0",
+    timezone: "Europe/Madrid",
   };
   for (const r of results) s[r.key] = r.value;
   return s;

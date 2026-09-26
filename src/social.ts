@@ -268,6 +268,66 @@ export async function unschedule(env: Env, p: SocialPost): Promise<void> {
   await env.DB.prepare("UPDATE social_posts SET status = 'draft', zernio_id = NULL, results = '[]', error = NULL, updated_at = ? WHERE id = ?").bind(now(), p.id).run();
 }
 
+/** Move a scheduled post to a new time. */
+export async function reschedule(env: Env, p: SocialPost, at: number): Promise<void> {
+  if (p.status !== "scheduled") throw new HttpError(409, "Only scheduled posts can be moved.");
+  if (!(at > now() + 60_000)) throw new HttpError(400, "Pick a time at least a couple of minutes from now.");
+  if (p.zernio_id && !(await mock(env))) await call(env, "PATCH", `/posts/${encodeURIComponent(p.zernio_id)}`, { scheduledFor: new Date(at).toISOString(), timezone: "UTC" });
+  await env.DB.prepare("UPDATE social_posts SET scheduled_at = ?, updated_at = ? WHERE id = ?").bind(at, now(), p.id).run();
+}
+
+/* ---------- posting slots ---------- */
+export interface Slot { day: number; time: string } // day 0 = Sunday … 6 = Saturday, time "HH:MM" in the workspace time zone
+
+export async function getSlots(env: Env, profileId: string): Promise<Slot[]> {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind("slots:" + profileId).first<{ value: string }>();
+  return parse<Slot[]>(r?.value || "[]", []);
+}
+export async function setSlots(env: Env, profileId: string, slots: Slot[]): Promise<Slot[]> {
+  const clean = slots.filter((x) => x.day >= 0 && x.day <= 6 && /^([01]\d|2[0-3]):[0-5]\d$/.test(x.time))
+    .map((x) => ({ day: Math.round(x.day), time: x.time }))
+    .filter((x, i, a) => a.findIndex((y) => y.day === x.day && y.time === x.time) === i)
+    .sort((a, b) => a.day - b.day || a.time.localeCompare(b.time)).slice(0, 70);
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind("slots:" + profileId, JSON.stringify(clean)).run();
+  return clean;
+}
+
+/** Offset of a time zone from UTC, in ms, at a given instant. */
+function tzOffset(tz: string, at: number): number {
+  const f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const p: Record<string, number> = {};
+  for (const x of f.formatToParts(new Date(at))) if (x.type !== "literal") p[x.type] = Number(x.value);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(at / 1000) * 1000;
+}
+/** Wall-clock time in a zone → instant. */
+export function zoned(tz: string, y: number, mo: number, d: number, h: number, mi: number): number {
+  const guess = Date.UTC(y, mo, d, h, mi);
+  const first = guess - tzOffset(tz, guess);
+  return guess - tzOffset(tz, first);
+}
+
+/** The next posting slot for a brand that nothing else is booked into. */
+export async function nextSlot(env: Env, profileId: string, tz: string, after = now() + 5 * 60_000): Promise<number | null> {
+  const slots = await getSlots(env, profileId);
+  if (!slots.length) return null;
+  const { results } = await env.DB.prepare("SELECT scheduled_at FROM social_posts WHERE profile_id = ? AND status IN ('scheduled','publishing') AND scheduled_at >= ?")
+    .bind(profileId, after - 3600_000).all<{ scheduled_at: number }>();
+  const taken = results.map((r) => r.scheduled_at);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(after)).split("-").map(Number);
+  for (let i = 0; i < 120; i++) {
+    const base = new Date(Date.UTC(today[0], today[1] - 1, today[2] + i));
+    const dow = base.getUTCDay();
+    for (const sl of slots.filter((x) => x.day === dow)) {
+      const [h, m] = sl.time.split(":").map(Number);
+      const at = zoned(tz, base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), h, m);
+      if (at <= after) continue;
+      if (taken.some((x) => Math.abs(x - at) < 30 * 60_000)) continue;
+      return at;
+    }
+  }
+  return null;
+}
+
 /** Check back on posts that should have gone out by now. */
 export async function syncSocial(env: Env, onlyId?: string): Promise<number> {
   const t = now();

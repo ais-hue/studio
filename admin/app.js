@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609262347";
+var VERSION = "202609262354";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -102,6 +102,7 @@ function route(){
   var v=$("#view"); v.innerHTML='<div class="loading">Loading…</div>';
   var p;
   if(top==="overview") p=overview();
+  else if(top==="calendar") p=calendarView();
   else if(top==="sites" && parts[1]==="new") p=sitesView(true);
   else if(top==="sites" && parts[1]) p=siteView(parts[1], parts[2]||"pages", parts[3]);
   else if(top==="sites") p=sitesView();
@@ -806,6 +807,83 @@ function automationView(qid, stepParam){
   });
 }
 
+/* ============ calendar ============ */
+var DAYS_SHORT=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function dayKey(d){ return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate() }
+function fmtTime(ms){ return new Date(ms).toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}) }
+function calendarView(){
+  var off=Number(store("studio.calOff")||0);
+  var now=new Date(), first=new Date(now.getFullYear(), now.getMonth()+off, 1);
+  var start=new Date(first); start.setDate(1-((first.getDay()+6)%7)); // Monday on or before the 1st
+  var end=new Date(start); end.setDate(start.getDate()+42);
+  return api("GET","calendar?from="+start.getTime()+"&to="+end.getTime()).then(function(d){
+    var v=$("#view"), byDay={};
+    d.items.forEach(function(it){ var k=dayKey(new Date(it.at)); (byDay[k]=byDay[k]||[]).push(it) });
+    var monthName=first.toLocaleDateString(undefined,{month:"long",year:"numeric"});
+    var html=head("Plan","Calendar","Every scheduled post and email in one place. Drag a scheduled item to another day to move it.",
+      '<div class="seg" role="group" aria-label="Month"><button type="button" id="calPrev" aria-label="Previous month">‹</button><button type="button" id="calToday">Today</button><button type="button" id="calNext" aria-label="Next month">›</button></div>');
+    html+='<div class="calwrap"><section class="panel cal"><h2 class="sec">'+esc(monthName)+' <span class="legend"><span><i class="k-social"></i>Social</span><span><i class="k-email"></i>Email</span></span></h2>'+
+      '<div class="calgrid" role="grid">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(function(x){ return '<div class="calhd" role="columnheader">'+x+'</div>' }).join("");
+    var today=dayKey(now);
+    for(var i=0;i<42;i++){
+      var day=new Date(start); day.setDate(start.getDate()+i);
+      var k=dayKey(day), items=byDay[k]||[], out=day.getMonth()!==first.getMonth(), past=day<new Date(now.getFullYear(),now.getMonth(),now.getDate());
+      html+='<div class="calday'+(out?" out":"")+(k===today?" today":"")+(past?" past":"")+'" role="gridcell" data-day="'+day.getTime()+'"><span class="dn">'+day.getDate()+'<span class="dw">'+day.toLocaleDateString(undefined,{weekday:"short"})+'</span></span>'+
+        items.map(function(it){ return '<a class="calit k-'+it.type+' st-'+esc(it.status)+'" href="'+esc(it.href)+'"'+(it.movable?' draggable="true" data-move="'+esc(it.type)+':'+esc(it.id)+':'+it.at+'"':'')+' title="'+esc(it.title+" · "+it.sub)+'"><b>'+fmtTime(it.at)+'</b> '+esc(it.title)+'</a>' }).join("")+'</div>';
+    }
+    html+='</div></section><aside class="stack"><section class="panel"><h2 class="sec">Drafts <span class="hint">'+d.drafts.length+'</span></h2>'+
+      (d.drafts.length ? '<div class="rows">'+d.drafts.map(function(p){ return '<div class="rowi nosq"><a class="t" href="'+esc(p.href)+'" style="text-decoration:none">'+esc(p.title)+'<small>'+esc([p.brand,p.sub].filter(Boolean).join(" · ")||"No accounts picked")+'</small></a><span class="meta"><button class="btn sm" type="button" data-q="'+esc(p.id)+'">Add to queue</button></span></div>' }).join("")+'</div>'
+        : '<div class="empty">No social drafts. <a href="#/social">Write one</a>.</div>')+'</section>'+
+      '<p class="hint">Add to queue puts a post in its brand’s next free posting time. Set posting times on the <a href="#/social">Social</a> page.</p></aside></div>';
+    v.innerHTML=html;
+    $("#calPrev").onclick=function(){ store("studio.calOff",String(off-1)); route() };
+    $("#calNext").onclick=function(){ store("studio.calOff",String(off+1)); route() };
+    $("#calToday").onclick=function(){ store("studio.calOff","0"); route() };
+    $$("[data-q]").forEach(function(b){ b.onclick=function(){ b.disabled=true; api("POST","social/posts/"+b.dataset.q+"/queue",{}).then(function(r){ toast("Queued for "+fmtDate(r.post.scheduled_at,true)); route() }).catch(function(e){ b.disabled=false; toast(e.message,true) }) } });
+    var dragging=null;
+    $$("[data-move]").forEach(function(a){
+      a.addEventListener("dragstart",function(e){ dragging=a.dataset.move; e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",dragging) }catch(x){} a.classList.add("dragging") });
+      a.addEventListener("dragend",function(){ a.classList.remove("dragging"); $$(".calday.over").forEach(function(c){ c.classList.remove("over") }) });
+    });
+    $$(".calday:not(.past)").forEach(function(c){
+      c.addEventListener("dragover",function(e){ if(dragging){ e.preventDefault(); c.classList.add("over") } });
+      c.addEventListener("dragleave",function(){ c.classList.remove("over") });
+      c.addEventListener("drop",function(e){ e.preventDefault(); c.classList.remove("over"); if(!dragging) return;
+        var parts=dragging.split(":"), type=parts[0], id=parts[1], old=new Date(Number(parts[2])), day=new Date(Number(c.dataset.day));
+        day.setHours(old.getHours(), old.getMinutes(), 0, 0); dragging=null;
+        if(dayKey(day)===dayKey(old)) return;
+        if(day.getTime()<Date.now()+120000){ toast("That time has already passed. Open it to pick a new time.",true); return }
+        var req = type==="social" ? api("POST","social/posts/"+id+"/reschedule",{at:day.getTime()}) : api("POST","campaigns/"+id+"/send",{at:day.getTime()});
+        req.then(function(){ toast("Moved to "+fmtDate(day.getTime(),true)); route() }).catch(function(err){ toast(err.message,true) });
+      });
+    });
+  });
+}
+
+/* posting times for a brand, used on the Social page */
+function slotsPanel(host, brand){
+  api("GET","social/brands/"+brand._id+"/slots").then(function(d){
+    var slots=d.slots, picked=[2,4];
+    function draw(){
+      var byTime={}; slots.forEach(function(s){ (byTime[s.time]=byTime[s.time]||[]).push(s.day) });
+      host.innerHTML='<section class="panel"><h2 class="sec">Posting times <span class="hint">'+esc(d.timezone)+'</span></h2><div class="pad stack" style="gap:12px">'+
+        (slots.length ? '<div class="slots">'+Object.keys(byTime).sort().map(function(t){ return '<div class="slotrow"><b>'+esc(t)+'</b><span class="daydots">'+[1,2,3,4,5,6,0].map(function(dd){ var on=byTime[t].indexOf(dd)>-1; return '<button type="button" class="dd" data-tog="'+dd+'|'+esc(t)+'" aria-pressed="'+on+'" aria-label="'+DAYS_SHORT[dd]+' at '+esc(t)+'">'+DAYS_SHORT[dd].slice(0,2)+'</button>' }).join("")+'</span><button type="button" class="btn sm ghost" data-rmt="'+esc(t)+'">Remove</button></div>' }).join("")+'</div>'
+          : '<p class="hint" style="margin:0">No posting times yet. Add a few, then “Add to queue” picks the next free one for you.</p>')+
+        '<div class="actions"><span class="daydots">'+[1,2,3,4,5,6,0].map(function(dd){ return '<button type="button" class="dd" data-new="'+dd+'" aria-pressed="'+(picked.indexOf(dd)>-1)+'" aria-label="'+DAYS_SHORT[dd]+'">'+DAYS_SHORT[dd].slice(0,2)+'</button>' }).join("")+'</span>'+
+          '<label class="sr" for="slTime">Time</label><input type="time" id="slTime" value="09:00" style="width:auto"><button class="btn sm" type="button" id="slAdd">Add time</button></div>'+
+        (d.next ? '<p class="hint" style="margin:0">Next free slot: <b>'+fmtDate(d.next,true)+'</b></p>' : '')+'</div></section>';
+      $$("[data-new]",host).forEach(function(b){ b.onclick=function(){ var dd=Number(b.dataset.new), i=picked.indexOf(dd); if(i>-1) picked.splice(i,1); else picked.push(dd); b.setAttribute("aria-pressed",String(i<0)) } });
+      $$("[data-tog]",host).forEach(function(b){ b.onclick=function(){ var pr=b.dataset.tog.split("|"), dd=Number(pr[0]), t=pr[1], i=slots.findIndex(function(s){return s.day===dd&&s.time===t});
+        if(i>-1) slots.splice(i,1); else slots.push({day:dd,time:t}); saveSlots() } });
+      $$("[data-rmt]",host).forEach(function(b){ b.onclick=function(){ slots=slots.filter(function(s){return s.time!==b.dataset.rmt}); saveSlots() } });
+      $("#slAdd",host).onclick=function(){ var t=$("#slTime",host).value; if(!t||!picked.length){ toast("Pick at least one day and a time.",true); return }
+        picked.forEach(function(dd){ if(!slots.some(function(s){return s.day===dd&&s.time===t})) slots.push({day:dd,time:t}) }); saveSlots() };
+    }
+    function saveSlots(){ api("PUT","social/brands/"+brand._id+"/slots",{slots:slots}).then(function(r){ slots=r.slots; d.next=r.next; draw() }).catch(function(e){ toast(e.message,true) }) }
+    draw();
+  }).catch(function(e){ host.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
+}
+
 /* ============ file library ============ */
 function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+" B"; if(n<1048576) return Math.round(n/1024)+" KB"; if(n<1073741824) return (n/1048576).toFixed(n<10485760?1:0)+" MB"; return (n/1073741824).toFixed(2)+" GB" }
 function imageSize(file){
@@ -1017,7 +1095,7 @@ function socialView(brandParam){
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
               (a ? '<span class="pu">@'+esc(a.username)+(a.active?'':' · needs reconnecting')+'</span><button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
-                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section>';
+                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="slotsHost"></div>';
         var groups=[["Needs attention",function(p){return p.status==="failed"||p.status==="partial"}],["Coming up",function(p){return p.status==="scheduled"||p.status==="publishing"}],["Drafts",function(p){return p.status==="draft"}],["Posted",function(p){return p.status==="published"}]];
         if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
         groups.forEach(function(g){
@@ -1028,6 +1106,7 @@ function socialView(brandParam){
             return '<a class="rowi nosq" href="#/social/p/'+esc(p.id)+'"><span class="t">'+esc(first)+'<small>'+esc(when)+' · '+esc(p.targets.map(function(t){return platName(t.platform)}).join(", ")||"No accounts picked")+(p.media.length?' · '+p.media.length+' media':'')+'</small></span><span class="meta">'+socialChip(p.status)+'</span></a>' }).join("")+'</div></section>';
         });
         v.innerHTML=html;
+        slotsPanel($("#slotsHost"), brand);
         $("#newPost").onclick=function(){ this.disabled=true; api("POST","social/posts",{profile_id:brand._id, targets:accounts.map(function(a){ return {platform:a.platform, accountId:a._id} })}).then(function(r){ go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
         $("#addBrand").onclick=function(){
           $("#brandHost").innerHTML='<form class="sheet" id="brandForm"><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Seek"></div><div class="actions"><button class="btn primary sm" type="submit">Create brand</button><button class="btn ghost sm" type="button" id="bCancel">Cancel</button></div></form>';
@@ -1061,7 +1140,8 @@ function socialPostView(pid){
       if(p.error && editable) html+='<div class="notice danger"><p>Last try didn’t go out: '+esc(p.error)+'</p></div>';
       if(!editable){
         html+='<div class="editor"><div class="stack">';
-        if(p.status==="scheduled") html+='<div class="notice"><p>Scheduled for <b>'+fmtDate(p.scheduled_at,true)+'</b>. To change anything, pull it back to a draft first.</p><button class="btn sm" type="button" id="spUnsched">Unschedule</button></div>';
+        if(p.status==="scheduled") html+='<div class="notice"><p>Scheduled for <b>'+fmtDate(p.scheduled_at,true)+'</b>. To change the words or pictures, pull it back to a draft first.</p><button class="btn sm" type="button" id="spUnsched">Unschedule</button></div>'+
+          '<div class="actions"><label class="sr" for="spMove">New time</label><input type="datetime-local" id="spMove" style="width:auto"><button class="btn sm" type="button" id="spMoveGo">Move to this time</button></div>';
         if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
         html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
           return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
@@ -1070,6 +1150,8 @@ function socialPostView(pid){
         v.innerHTML=html;
         renderPreview();
         var us=$("#spUnsched"); if(us) us.onclick=function(){ api("POST","social/posts/"+pid+"/unschedule").then(function(){ toast("Back to draft"); route() }).catch(function(e){ toast(e.message,true) }) };
+        var mv=$("#spMoveGo"); if(mv) mv.onclick=function(){ var val=$("#spMove").value; if(!val){ toast("Pick a new date and time first.",true); return }
+          api("POST","social/posts/"+pid+"/reschedule",{at:new Date(val).getTime()}).then(function(){ toast("Moved"); route() }).catch(function(e){ toast(e.message,true) }) };
         var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Trying again"); route() }).catch(function(e){ toast(e.message,true); rt.disabled=false }) };
         if(p.status==="publishing"||(p.status==="scheduled"&&p.scheduled_at<Date.now()+120000)){ var poll=setInterval(route, 8000); S.cleanup.push(function(){ clearInterval(poll) }) }
         common(); return;
@@ -1083,7 +1165,8 @@ function socialPostView(pid){
           '<div class="actions"><label class="btn sm" style="cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Upload</label>'+(S.me.files?'<button class="btn sm" type="button" id="spLib">From your files</button>':'')+'</div><span class="hint">'+(S.me.files?'Uploads are saved to your '+esc(brand.name)+' files too.':'Up to 100 MB each.')+' Instagram, TikTok and Pinterest need at least one.</span></div>'+
         '<div id="spExtras" class="stack" style="gap:14px"></div>'+
         '<h2 class="sec">Send</h2><ul class="probs" id="spProbs"></ul>'+
-        '<div class="actions"><button class="btn primary" type="button" id="spNow">Post now</button><span class="muted">or</span><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto"><button class="btn" type="button" id="spSched">Schedule</button></div><div id="spSend"></div>'+
+        '<div class="actions"><button class="btn primary" type="button" id="spQueue" disabled>Add to queue</button><button class="btn" type="button" id="spNow">Post now</button></div>'+
+        '<div class="actions"><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto"><button class="btn" type="button" id="spSched">Schedule for this time</button></div><p class="hint" id="spQHint"></p><div id="spSend"></div>'+
         '</form><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
       v.innerHTML=html;
 
@@ -1092,7 +1175,11 @@ function socialPostView(pid){
         var n=$("#spText").value.length;
         $("#spCounts").innerHTML=sel().map(function(pl){ var lim=S.social.platforms[pl].limit, over=n>lim; return '<span class="'+(over?"over":"")+'">'+esc(platName(pl))+' '+n.toLocaleString()+'/'+lim.toLocaleString()+'</span>' }).join("");
       }
-      function showProblems(){ var ul=$("#spProbs"); if(!ul) return; ul.innerHTML=(p.problems||[]).map(function(x){ return '<li>'+esc(x)+'</li>' }).join(""); $("#spNow").disabled=$("#spSched").disabled=!!(p.problems&&p.problems.length) }
+      var nextAt=null;
+      function showProblems(){ var ul=$("#spProbs"); if(!ul) return; ul.innerHTML=(p.problems||[]).map(function(x){ return '<li>'+esc(x)+'</li>' }).join(""); var bad=!!(p.problems&&p.problems.length); $("#spNow").disabled=$("#spSched").disabled=bad; $("#spQueue").disabled=bad||!nextAt }
+      api("GET","social/brands/"+brand._id+"/slots").then(function(d){ nextAt=d.next; var q=$("#spQueue"), h=$("#spQHint"); if(!q) return;
+        if(nextAt){ q.textContent="Add to queue: "+fmtDate(nextAt,true); h.textContent="" } else { h.innerHTML='Set <a href="#/social/b/'+esc(brand._id)+'">posting times</a> for '+esc(brand.name)+' to use the queue.' }
+        showProblems() }).catch(function(){});
       function mediaList(){
         $("#spMedia").innerHTML=p.media.map(function(m,i){ return '<figure>'+(m.type==="video"?'<video src="'+esc(m.url)+'" muted playsinline preload="metadata"></video>':'<img src="'+esc(m.url)+'" alt="">')+'<figcaption>'+esc(m.name||m.type)+'</figcaption><button type="button" class="btn sm ghost" data-rm="'+i+'" aria-label="Remove '+esc(m.name||"file")+'">Remove</button></figure>' }).join("");
         $$("[data-rm]").forEach(function(b){ b.onclick=function(){ p.media.splice(Number(b.dataset.rm),1); mediaList(); save({media:p.media}); save.now(); renderPreview() } });
@@ -1161,6 +1248,8 @@ function socialPostView(pid){
       };
       $("#spNow").onclick=function(){ save.now(); confirmBox("Post to "+esc(where())+" now?", "Post it", function(){
         setTimeout(function(){ api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Posting"); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
+      $("#spQueue").onclick=function(){ save.now(); confirmBox("Queue for "+esc(where())+" on "+esc(fmtDate(nextAt,true))+"?", "Queue it", function(){
+        setTimeout(function(){ api("POST","social/posts/"+pid+"/queue",{}).then(function(r){ toast("Queued for "+fmtDate(r.post.scheduled_at,true)); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
       $("#spSched").onclick=function(){ save.now(); var val=$("#spAt").value; if(!val){ toast("Pick a date and time first.",true); return }
         var at=new Date(val).getTime(); confirmBox("Post to "+esc(where())+" on "+esc(fmtDate(at,true))+"?", "Schedule", function(){
         setTimeout(function(){ api("POST","social/posts/"+pid+"/publish",{at:at}).then(function(){ toast("Scheduled"); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
@@ -1203,6 +1292,7 @@ function settingsView(){
       '<div class="field"><label for="sEmail">From address</label><input type="email" id="sEmail" data-k="sender_email" maxlength="120" value="'+esc(s.sender_email)+'"><span class="hint">Must end in @'+esc(S.me.root)+'.</span></div></div>'+
       '<div class="field"><label for="sReply">Replies go to</label><input type="email" id="sReply" data-k="reply_to" maxlength="120" value="'+esc(s.reply_to)+'" placeholder="Same as the from address"></div>'+
       '<div class="field"><label for="sAddr">Postal address</label><input type="text" id="sAddr" data-k="postal_address" maxlength="200" value="'+esc(s.postal_address)+'"><span class="hint">Marketing email law (GDPR, CAN-SPAM) expects a way to reach you. It sits small in every email footer. A PO box or business address is fine.</span></div>'+
+      '<div class="field"><label for="sTz">Your time zone</label><select id="sTz" data-k="timezone">'+(function(){ var zones=[]; try{ zones=Intl.supportedValuesOf("timeZone") }catch(e){ zones=["Europe/Madrid","Europe/Dublin","Europe/London","UTC"] } if(zones.indexOf(s.timezone)<0) zones.unshift(s.timezone); return zones.map(function(z){ return '<option'+(z===s.timezone?" selected":"")+'>'+esc(z)+'</option>' }).join("") })()+'</select><span class="hint">Posting times for social brands use this.</span></div>'+
       '<h2 class="sec">Signup forms</h2>'+
       '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
       '<div class="actions"><button type="button" class="switch" role="switch" id="sDbl" aria-checked="'+dbl+'" aria-labelledby="sDblLbl"></button><span id="sDblLbl">Ask new sign-ups to confirm their email</span></div>'+
@@ -1219,7 +1309,7 @@ function settingsView(){
       '<div class="rowi" style="--pc:var(--moss)"><span class="t">Domain<small>*.'+esc(S.me.root)+'</small></span><span class="meta"><span class="chip sent">Every subdomain</span></span></div>'+
       '</div></section>'+(S.me.dev?'<p class="hint">This is the local test copy. Nothing is really emailed.</p>':'')+'</div></div>';
     var save=saver($("#setSave"), function(x){ return api("PUT","settings",x) });
-    $$("[data-k]",v).forEach(function(i){ i.oninput=function(){ var o={}; o[i.dataset.k]=i.value; save(o) } });
+    $$("[data-k]",v).forEach(function(i){ i.oninput=i.onchange=function(){ var o={}; o[i.dataset.k]=i.value; save(o) } });
     $("#sDbl").onclick=function(){ var on=this.getAttribute("aria-checked")!=="true"; this.setAttribute("aria-checked",String(on)); save({double_optin:on?"1":"0"}); save.now(); toast(on?"New sign-ups will be asked to confirm":"Sign-ups join straight away") };
 
     function manual(host, note){

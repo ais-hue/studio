@@ -6,7 +6,7 @@ import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./autom
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
-import { PLATFORMS, SocialPost, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
+import { PLATFORMS, SocialPost, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -586,6 +586,34 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   }
 
 
+
+  /* ---------- calendar ---------- */
+  if (a === "calendar" && m === "GET") {
+    const from = Number(url.searchParams.get("from")) || t - 7 * 864e5;
+    const to = Math.min(Number(url.searchParams.get("to")) || t + 35 * 864e5, from + 100 * 864e5);
+    const [camps, posts] = await env.DB.batch([
+      env.DB.prepare(`SELECT cp.id, cp.name, cp.subject, cp.status, COALESCE(cp.scheduled_at, cp.sent_at) AS at, l.name AS list_name, s.accent
+        FROM campaigns cp LEFT JOIN lists l ON l.id = cp.list_id LEFT JOIN sites s ON s.id = cp.site_id
+        WHERE cp.status != 'draft' AND COALESCE(cp.scheduled_at, cp.sent_at) BETWEEN ? AND ?`).bind(from, to),
+      env.DB.prepare(`SELECT id, profile_id, content, status, targets, media, COALESCE(scheduled_at, published_at) AS at FROM social_posts
+        WHERE status != 'draft' AND COALESCE(scheduled_at, published_at) BETWEEN ? AND ?`).bind(from, to),
+    ]);
+    let brands: Array<{ _id: string; name: string }> = [];
+    if ((posts.results as any[]).length) { try { brands = await brandsList(env); } catch { brands = []; } }
+    const bname = (pid: string) => brands.find((x) => x._id === pid)?.name || "";
+    const drafts = (await env.DB.prepare("SELECT id, profile_id, content, targets, media, updated_at FROM social_posts WHERE status = 'draft' ORDER BY updated_at DESC LIMIT 30").all<any>()).results;
+    if (drafts.length && !brands.length) { try { brands = await brandsList(env); } catch { brands = []; } }
+    const first = (s: string) => (String(s || "").split("\n")[0] || "").slice(0, 120);
+    const items = [
+      ...(camps.results as any[]).map((c) => ({ type: "email", id: c.id, at: c.at, title: c.subject || c.name, sub: c.list_name ? "To " + c.list_name : "To everyone", status: c.status, movable: c.status === "scheduled", href: "#/emails/" + c.id })),
+      ...(posts.results as any[]).map((p) => ({ type: "social", id: p.id, at: p.at, title: first(p.content) || (JSON.parse(p.media || "[]").length ? "Picture post" : "Post"),
+        sub: [bname(p.profile_id), JSON.parse(p.targets || "[]").map((x: any) => PLATFORMS[x.platform]?.name || x.platform).join(", ")].filter(Boolean).join(" · "),
+        status: p.status, movable: p.status === "scheduled", href: "#/social/p/" + p.id })),
+    ].sort((x, y) => x.at - y.at);
+    return json({ items, drafts: drafts.map((p) => ({ id: p.id, title: first(p.content) || "Untitled post", brand: bname(p.profile_id), profile_id: p.profile_id,
+      sub: JSON.parse(p.targets || "[]").map((x: any) => PLATFORMS[x.platform]?.name || x.platform).join(", "), href: "#/social/p/" + p.id })) });
+  }
+
   /* ---------- file library ---------- */
   if (a === "files") {
     const getFile = async (fid: string) => {
@@ -637,6 +665,16 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const back = `https://${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
       const localBack = `${url.protocol}//${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
       return json({ url: await connectUrl(env, str(d.platform, 20), s2, url.protocol === "https:" ? back : localBack) });
+    }
+    if (s1 === "brands" && s2 && s3 === "slots" && m === "GET") {
+      const tz = (await getSettings(env)).timezone;
+      return json({ slots: await getSlots(env, s2), next: await nextSlot(env, s2, tz), timezone: tz });
+    }
+    if (s1 === "brands" && s2 && s3 === "slots" && m === "PUT") {
+      const d = await body(req);
+      const tz = (await getSettings(env)).timezone;
+      const slots = await setSlots(env, s2, Array.isArray(d.slots) ? d.slots.map((x: any) => ({ day: Number(x.day), time: String(x.time || "") })) : []);
+      return json({ slots, next: await nextSlot(env, s2, tz), timezone: tz });
     }
     if (s1 === "accounts" && s2 && !s3 && m === "DELETE") { await disconnect(env, s2); return json({ ok: true }); }
     if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
@@ -699,6 +737,19 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         await publish(env, await get(s2), at);
         return json({ post: view(await get(s2)) });
       }
+      if (s2 && s3 === "queue" && m === "POST") {
+        const p = await get(s2);
+        const tz = (await getSettings(env)).timezone;
+        const at = await nextSlot(env, p.profile_id, tz);
+        if (!at) throw new HttpError(400, "Set up posting times for this brand first.");
+        await publish(env, p, at);
+        return json({ post: view(await get(s2)) });
+      }
+      if (s2 && s3 === "reschedule" && m === "POST") {
+        const d = await body(req);
+        await reschedule(env, await get(s2), Number(d.at));
+        return json({ post: view(await get(s2)) });
+      }
       if (s2 && s3 === "unschedule" && m === "POST") { await unschedule(env, await get(s2)); return json({ post: view(await get(s2)) }); }
       if (s2 && s3 === "duplicate" && m === "POST") {
         const p = await get(s2);
@@ -745,7 +796,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (!b && m === "GET") return json({ settings: await visible() });
     if (!b && m === "PUT") {
       const d = await body(req);
-      const allowed = ["sender_name", "sender_email", "reply_to", "postal_address", "consent_text", "double_optin"];
+      const allowed = ["sender_name", "sender_email", "reply_to", "postal_address", "consent_text", "double_optin", "timezone"];
+      if (d.timezone !== undefined) { try { new Intl.DateTimeFormat("en", { timeZone: String(d.timezone) }); } catch { throw new HttpError(400, "That time zone isn’t recognised."); } }
       if (d.double_optin !== undefined) d.double_optin = d.double_optin === true || d.double_optin === "1" ? "1" : "0";
       if (d.sender_email !== undefined && !isEmail(str(d.sender_email))) throw new HttpError(400, "The sender address doesn’t look right.");
       if (d.sender_email !== undefined && !str(d.sender_email).toLowerCase().endsWith("@" + env.ROOT_DOMAIN)) throw new HttpError(400, `The sender address has to end in @${env.ROOT_DOMAIN}.`);
