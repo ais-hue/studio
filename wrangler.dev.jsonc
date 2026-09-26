@@ -1,5 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // Local testing only (npm run dev). Same as wrangler.jsonc minus the live routes.
   "name": "studio",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
@@ -12,11 +13,6 @@
   // Created automatically by Cloudflare on the first deploy. Studio builds its own tables on first run.
   "d1_databases": [
     { "binding": "DB", "database_name": "studio", "migrations_dir": "migrations" }
-  ],
-  // Every subdomain of aisling.online (studio., go., and each site) is served by this worker.
-  // The apex and www are not matched, so the existing GoDaddy page is untouched.
-  "routes": [
-    { "pattern": "*.aisling.online/*", "zone_name": "aisling.online" }
   ],
   "workers_dev": false,
   "triggers": { "crons": ["* * * * *"] },

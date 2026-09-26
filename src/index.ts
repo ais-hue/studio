@@ -3,6 +3,13 @@ import { authEmail } from "./auth";
 import { handleApi } from "./api";
 import { handlePublic, serveStatic } from "./public";
 import { runScheduled } from "./email";
+import { SCHEMA } from "./schema";
+
+let schemaReady: Promise<unknown> | null = null;
+function ensureSchema(env: Env) {
+  if (!schemaReady) schemaReady = env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q))).catch((e) => { schemaReady = null; throw e; });
+  return schemaReady;
+}
 
 async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
@@ -32,6 +39,7 @@ export default {
     const host = url.hostname.toLowerCase();
     const root = env.ROOT_DOMAIN.toLowerCase();
     try {
+      await ensureSchema(env);
       if (host === `studio.${root}`) return await studio(req, env, ctx);
       if (host.endsWith("." + root)) {
         const sub = host.slice(0, -(root.length + 1));
@@ -45,6 +53,6 @@ export default {
     }
   },
   async scheduled(_ev: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runScheduled(env));
+    ctx.waitUntil(ensureSchema(env).then(() => runScheduled(env)));
   },
 } satisfies ExportedHandler<Env>;
