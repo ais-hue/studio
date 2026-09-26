@@ -1,6 +1,7 @@
 import { Env, accentOf, esc, getSettings, id, markdown, now, plainText } from "./util";
 import { runSequences } from "./automation";
 import { syncSocial } from "./social";
+import { cleanUploads } from "./files";
 
 interface SendRow {
   id: string; campaign_id: string | null; list_id: string | null; step_id: string | null; kind: string;
@@ -38,7 +39,8 @@ export function renderEmail(
     .replace(/<ul>/g, `<ul style="margin:0 0 16px;padding-left:20px;">`)
     .replace(/<ol>/g, `<ol style="margin:0 0 16px;padding-left:20px;">`)
     .replace(/<hr>/g, `<hr style="border:0;border-top:1px solid #161512;margin:24px 0;">`)
-    .replace(/<a href="/g, `<a style="color:${accent};" href="`);
+    .replace(/<a href="/g, `<a style="color:${accent};" href="`)
+    .replace(/<img src="/g, `<img style="display:block;width:100%;max-width:544px;height:auto;border:0;margin:0 0 16px;" width="544" src="`);
   if (opts.sendId && !opts.test) {
     body = body.replace(/href="(https?:\/\/[^"]+)"/g, (_m, u) =>
       `href="${go}/c/${opts.sendId}?u=${encodeURIComponent(u.replace(/&amp;/g, "&"))}"`);
@@ -190,6 +192,7 @@ export async function runScheduled(env: Env): Promise<void> {
   await runSequences(env, 300);
   await processQueue(env, 500);
   await syncSocial(env).catch((e) => console.error("Social sync:", e));
+  if (new Date().getUTCMinutes() === 7) await cleanUploads(env).catch((e) => console.error("File cleanup:", e));
 }
 
 /** Test one automation email. */

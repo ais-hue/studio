@@ -11,6 +11,10 @@
     "run_worker_first": true
   },
   // Created automatically by Cloudflare on the first deploy. Studio builds its own tables on first run.
+  // File library. Created automatically on deploy (R2 must be switched on in the account).
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "studio-files" }
+  ],
   "d1_databases": [
     { "binding": "DB", "database_name": "studio", "migrations_dir": "migrations" }
   ],

@@ -30,6 +30,9 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS social_posts ( id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', media TEXT NOT NULL DEFAULT '[]', targets TEXT NOT NULL DEFAULT '[]', options TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'draft', scheduled_at INTEGER, published_at INTEGER, zernio_id TEXT, results TEXT NOT NULL DEFAULT '[]', error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS idx_social_profile ON social_posts(profile_id, status)",
  "CREATE INDEX IF NOT EXISTS idx_social_due ON social_posts(status, scheduled_at)",
+ "CREATE TABLE IF NOT EXISTS files ( id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, folder TEXT NOT NULL DEFAULT '', type TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, width INTEGER, height INTEGER, alt TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'ready', upload_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder, created_at)",
+ "CREATE INDEX IF NOT EXISTS idx_files_time ON files(created_at)",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",

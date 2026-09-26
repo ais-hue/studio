@@ -8,6 +8,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   RESEND_WEBHOOK_SECRET?: string;
   ZERNIO_API_KEY?: string;
+  FILES?: R2Bucket;
   ADMIN_EMAILS: string;
 }
 
@@ -42,7 +43,7 @@ export function slugify(s: string, max = 40): string {
     .replace(/-+$/g, "");
 }
 
-export const RESERVED_SUBDOMAINS = new Set(["studio", "go", "www", "mail", "email", "api", "admin", "app"]);
+export const RESERVED_SUBDOMAINS = new Set(["studio", "go", "www", "mail", "email", "api", "admin", "app", "files"]);
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -81,6 +82,8 @@ export const accentOf = (a: string) => ACCENTS[a] || ACCENTS.brass;
 /* ---------- tiny, safe markdown ---------- */
 function inline(s: string): string {
   let out = esc(s);
+  // images ![alt](https://…)
+  out = out.replace(/!\[([^\]]*)\]\((https:\/\/[^)\s]+)\)/g, (_m, alt, u) => `<img src="${esc(u.replace(/&amp;/g, "&"))}" alt="${alt}">`);
   // links [text](url)
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, t, u) => {
     const url = u.replace(/&amp;/g, "&");

@@ -5,6 +5,7 @@ import { handlePublic, serveStatic } from "./public";
 import { runScheduled } from "./email";
 import { ALTERS, SCHEMA } from "./schema";
 import { handleAuth } from "./login";
+import { serveFile } from "./files";
 
 let schemaReady: Promise<unknown> | null = null;
 async function applySchema(env: Env) {
@@ -64,6 +65,7 @@ export default {
     try {
       await ensureSchema(env);
       if (host === `studio.${root}`) return await studio(req, env, ctx);
+      if (host === `files.${root}`) return await serveFile(req, env, url);
       if (host.endsWith("." + root)) {
         const sub = host.slice(0, -(root.length + 1));
         if (!sub.includes(".")) return await handlePublic(req, env, ctx, host, sub);

@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609262250";
+var VERSION = "202609262347";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -110,6 +110,7 @@ function route(){
   else if(top==="emails") p=emailsView();
   else if(top==="automations" && parts[1]) p=automationView(parts[1], parts[2]);
   else if(top==="automations") p=automationsView();
+  else if(top==="files") p=filesView(parts[1]===undefined?null:(parts[1]==="_"?"":decodeURIComponent(parts[1])));
   else if(top==="social" && parts[1]==="p" && parts[2]) p=socialPostView(parts[2]);
   else if(top==="social") p=socialView(parts[1]==="b"?parts[2]:null);
   else if(top==="settings") p=settingsView();
@@ -299,6 +300,7 @@ function sitePages(site, pages, pageId){
       '</form><div class="proof"><div class="proofbar"><span class="url">https://'+esc(hostOf(site))+'/<span id="pvSlug">'+esc(p.slug)+'</span></span>'+
       '<div class="seg" role="group" aria-label="Preview theme"><button type="button" data-pv="site" aria-pressed="'+(previewTheme==="site")+'">Site</button><button type="button" data-pv="light" aria-pressed="'+(previewTheme==="light")+'">Light</button><button type="button" data-pv="dark" aria-pressed="'+(previewTheme==="dark")+'">Dark</button></div></div>'+
       '<iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
+    imageButton($("#pcBody"), $("#pcBody").nextElementSibling);
     var save = saver($("#edSave"), function(data){
       return api("PATCH","pages/"+p.id,data).then(function(r){ p.title=r.page.title; p.slug=r.page.slug; p.content=r.page.content;
         var sl=$("#pSlug"); if(sl && document.activeElement!==sl && sl.value!==r.page.slug){ sl.value=r.page.slug }
@@ -385,6 +387,7 @@ function siteWelcome(site, list){
   var t;
   function preview(){ clearTimeout(t); t=setTimeout(function(){ emailPreview($("#pv"),{ subject:$("#wSubj").value, body:$("#wBody").value, site_id:site.id }) },250) }
   S.cleanup.push(function(){ clearTimeout(t) });
+  imageButton($("#wBody"), $("#wBody").nextElementSibling);
   var save=saver($("#wSave"), function(d){ return api("PATCH","lists/"+list.id,d) });
   $("#wSubj").oninput=function(){ save({welcome_subject:this.value}); preview() };
   $("#wBody").oninput=function(){ save({welcome_body:this.value}); preview() };
@@ -604,6 +607,7 @@ function emailView(cid){
         '<div id="sendConfirm"></div></form>'+
         '<div class="proof email"><div class="proofbar"><span class="url">inbox view</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div></div>';
       v.innerHTML=html;
+      imageButton($("#cpBody"), $("#cpBody").nextElementSibling);
       var showAudience=function(n){ audience=n; $("#audience").textContent = "Goes to "+n+" subscribed "+(n===1?"person":"people")+" on “"+listLabel($("#cpList").value||null)+"”. Unsubscribed people are always left out." };
       showAudience(audience);
       var t; function preview(){ clearTimeout(t); t=setTimeout(function(){ emailPreview($("#pv"),{subject:$("#cpSubj").value, preheader:$("#cpPre").value, body:$("#cpBody").value, site_id:$("#cpSite").value||null}) },250) }
@@ -774,6 +778,7 @@ function automationView(qid, stepParam){
 
     if(!sel) return;
     // selected email
+    imageButton($("#stBody"), $("#stBody").nextElementSibling);
     var t, preview=function(){ clearTimeout(t); t=setTimeout(function(){ emailPreview($("#pv"),{ subject:$("#stSubj").value, preheader:$("#stPre").value, body:$("#stBody").value, site_id:$("#aSite").value||null }) },250) };
     S.cleanup.push(function(){ clearTimeout(t) });
     var ssave=saver($("#stSave"), function(x){ return api("PATCH","steps/"+sel.id,x).then(function(r){ Object.assign(sel, r.step);
@@ -798,6 +803,176 @@ function automationView(qid, stepParam){
       $("#sdYes").onclick=function(){ api("DELETE","steps/"+sel.id).then(function(){ toast("Email deleted"); go("#/automations/"+qid) }).catch(function(e){ toast(e.message,true) }) };
     };
     preview();
+  });
+}
+
+/* ============ file library ============ */
+function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+" B"; if(n<1048576) return Math.round(n/1024)+" KB"; if(n<1073741824) return (n/1048576).toFixed(n<10485760?1:0)+" MB"; return (n/1073741824).toFixed(2)+" GB" }
+function imageSize(file){
+  return new Promise(function(res){
+    if(!/^image\//.test(file.type)||/svg/.test(file.type)) return res(null);
+    var u=URL.createObjectURL(file), im=new Image();
+    im.onload=function(){ res({w:im.naturalWidth,h:im.naturalHeight}); URL.revokeObjectURL(u) };
+    im.onerror=function(){ res(null); URL.revokeObjectURL(u) };
+    im.src=u;
+  });
+}
+/** Upload one file to the library. Big files go up in parts. onProgress(0..1). */
+function uploadToLibrary(file, folder, onProgress){
+  onProgress=onProgress||function(){};
+  var type=file.type||"application/octet-stream";
+  return imageSize(file).then(function(dim){
+    var h={"content-type":type,"x-filename":encodeURIComponent(file.name),"x-folder":encodeURIComponent(folder||""),"x-size":String(file.size)};
+    if(dim){ h["x-width"]=String(dim.w); h["x-height"]=String(dim.h) }
+    var parse=function(res){ return res.json().then(function(d){ if(res.status===401){ location.href="/login" } if(!res.ok) throw new Error(d.error||"Upload failed"); return d }) };
+    if(file.size<=90*1024*1024){
+      onProgress(0.1);
+      return fetch("/api/files",{method:"POST",headers:h,body:file}).then(parse).then(function(d){ onProgress(1); return d.file });
+    }
+    return fetch("/api/files/big",{method:"POST",headers:h}).then(parse).then(function(start){
+      var id=start.file.id, size=start.partSize, n=Math.ceil(file.size/size), parts=[], i=0;
+      var next=function(){
+        if(i>=n) return fetch("/api/files/"+id+"/finish",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({parts:parts})}).then(parse).then(function(d){ onProgress(1); return d.file });
+        var chunk=file.slice(i*size, Math.min(file.size,(i+1)*size)), num=i+1;
+        var attempt=function(tries){ return fetch("/api/files/"+id+"/parts/"+num,{method:"PUT",body:chunk}).then(parse).catch(function(e){ if(tries<2) return attempt(tries+1); throw e }) };
+        return attempt(0).then(function(p){ parts.push(p); i++; onProgress(i/n*0.98); return next() });
+      };
+      return next();
+    });
+  });
+}
+function thumb(f){
+  if(f.kind==="image") return '<img src="'+esc(f.url)+'" alt="'+esc(f.alt)+'" loading="lazy">';
+  if(f.kind==="video") return '<video src="'+esc(f.url)+'#t=0.5" muted playsinline preload="metadata"></video>';
+  return '<span class="ftype">'+esc((f.name.split(".").pop()||f.kind).toUpperCase())+'</span>';
+}
+
+/** Choose files from the library. opts: {kind:"image"|"", multiple:bool, folder:""} → Promise<[file]> (empty if cancelled). */
+function pickFromLibrary(opts){
+  opts=opts||{};
+  return new Promise(function(resolve){
+    var chosen=[], folder=opts.folder||"*";
+    var ov=document.createElement("div"); ov.className="modal"; ov.setAttribute("role","dialog"); ov.setAttribute("aria-modal","true"); ov.setAttribute("aria-label","Choose from your files");
+    ov.innerHTML='<div class="modalbox"><div class="modalhead"><b>Choose '+(opts.kind==="image"?"an image":"files")+'</b><button class="btn sm ghost" type="button" data-x>Cancel</button></div>'+
+      '<div class="filters" style="padding:12px 18px"><input type="search" id="pkQ" placeholder="Search"><select id="pkF"></select><label class="btn sm" style="cursor:pointer"><input type="file" id="pkUp" hidden multiple accept="'+(opts.kind==="image"?"image/*":"image/*,video/*,application/pdf")+'">Upload</label></div>'+
+      '<div class="fgrid pk" id="pkGrid"><div class="loading">Loading…</div></div><div class="modalfoot"><span class="hint" id="pkN"></span><button class="btn primary" type="button" id="pkGo" disabled>Use '+(opts.multiple?"these":"this")+'</button></div></div>';
+    document.body.appendChild(ov);
+    var close=function(val){ document.removeEventListener("keydown",esc_); ov.remove(); resolve(val) };
+    var esc_=function(e){ if(e.key==="Escape") close([]) };
+    document.addEventListener("keydown",esc_);
+    ov.addEventListener("click",function(e){ if(e.target===ov) close([]) });
+    ov.querySelector("[data-x]").onclick=function(){ close([]) };
+    var files=[];
+    function load(){
+      var qs="folder="+encodeURIComponent(folder)+(opts.kind?"&kind="+opts.kind:"")+($("#pkQ",ov).value?"&q="+encodeURIComponent($("#pkQ",ov).value):"");
+      api("GET","files?"+qs).then(function(d){
+        if(!d.enabled){ $("#pkGrid",ov).innerHTML='<div class="empty">File storage isn’t switched on yet.</div>'; return }
+        var fs=$("#pkF",ov); if(!fs.options.length) fs.innerHTML='<option value="*">All folders</option><option value="">Unfiled</option>'+d.folders.filter(function(x){return x.folder}).map(function(x){ return '<option>'+esc(x.folder)+'</option>' }).join("");
+        fs.value=folder;
+        files=d.files; draw();
+      }).catch(function(e){ $("#pkGrid",ov).innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
+    }
+    function draw(){
+      $("#pkGrid",ov).innerHTML = files.length ? files.map(function(f){ var on=chosen.some(function(c){return c.id===f.id});
+        return '<button type="button" class="fcard" data-f="'+esc(f.id)+'" aria-pressed="'+on+'"><span class="fthumb">'+thumb(f)+'</span><span class="fname">'+esc(f.name)+'</span></button>' }).join("") : '<div class="empty">Nothing here yet. Upload something.</div>';
+      $$("[data-f]",ov).forEach(function(b){ b.onclick=function(){ var f=files.filter(function(x){return x.id===b.dataset.f})[0];
+        if(opts.multiple){ var i=chosen.findIndex(function(c){return c.id===f.id}); if(i>-1) chosen.splice(i,1); else chosen.push(f) } else chosen=[f];
+        draw() }; b.ondblclick=function(){ if(!opts.multiple) close([files.filter(function(x){return x.id===b.dataset.f})[0]]) } });
+      $("#pkN",ov).textContent = chosen.length ? chosen.length+" chosen" : "";
+      $("#pkGo",ov).disabled=!chosen.length;
+    }
+    $("#pkGo",ov).onclick=function(){ close(chosen) };
+    var qt; $("#pkQ",ov).oninput=function(){ clearTimeout(qt); qt=setTimeout(load,250) };
+    $("#pkF",ov).onchange=function(){ folder=this.value; load() };
+    $("#pkUp",ov).onchange=function(){ var list=Array.prototype.slice.call(this.files); this.value="";
+      list.reduce(function(ch,f){ return ch.then(function(){ toast("Uploading "+f.name+"…"); return uploadToLibrary(f, folder==="*"?(opts.folder||""):folder).then(function(nf){ chosen=opts.multiple?chosen.concat([nf]):[nf]; toast(f.name+" uploaded") }) }) }, Promise.resolve())
+        .then(load).catch(function(e){ toast(e.message,true) }) };
+    load();
+    setTimeout(function(){ $("#pkQ",ov).focus() },30);
+  });
+}
+/** Add an "Insert image" button that puts ![alt](url) into a textarea at the cursor. */
+function imageButton(textarea, after){
+  if(!S.me.files||!textarea) return;
+  var b=document.createElement("button"); b.type="button"; b.className="btn sm"; b.textContent="Insert image"; b.style.alignSelf="flex-start";
+  b.onclick=function(){ pickFromLibrary({kind:"image"}).then(function(fs){ if(!fs.length) return; var f=fs[0];
+    var md="\n![" + (f.alt||"").replace(/[\[\]]/g,"") + "](" + f.url + ")\n", s=(document.activeElement===textarea||textarea.selectionStart)?textarea.selectionStart:textarea.value.length;
+    textarea.value=textarea.value.slice(0,s)+md+textarea.value.slice(s); textarea.dispatchEvent(new Event("input",{bubbles:true})); textarea.focus() }) };
+  (after||textarea).insertAdjacentElement("afterend", b);
+}
+
+function filesView(folderParam){
+  return api("GET","files?folder="+encodeURIComponent(folderParam==null?"*":folderParam)).then(function(d){
+    var v=$("#view"), folder=folderParam==null?"*":folderParam, files=d.files, open=null;
+    var sub='Pictures, video and documents for every brand. Use them in posts, emails and pages.';
+    if(!d.enabled){ v.innerHTML=head("Library","Files",sub)+'<div class="notice"><p><b>File storage isn’t switched on yet.</b> Turn on R2 in Cloudflare, then Studio sets up its storage on the next update.</p></div>'; return }
+    var pctUsed=Math.min(100, d.usage.bytes/d.usage.free*100);
+    var html=head("Library","Files",sub,'<label class="btn primary" style="cursor:pointer"><input type="file" id="fUp" multiple hidden accept="image/*,video/*,application/pdf,audio/*">Upload</label>')+
+      '<div class="cols"><aside class="stack" style="gap:10px"><div class="actions" style="justify-content:space-between"><span class="eyebrow">Folders</span><button class="btn sm" type="button" id="newFolder">New folder</button></div><div id="nfHost"></div><div class="listnav">'+
+        '<button type="button" data-folder="*" aria-pressed="'+(folder==="*")+'"><span>All files</span><span class="num">'+d.usage.n+'</span></button>'+
+        d.folders.map(function(x){ return '<button type="button" data-folder="'+esc(x.folder)+'" aria-pressed="'+(folder===x.folder)+'"><span>'+esc(x.folder||"Unfiled")+'</span><span class="num">'+x.n+'</span></button>' }).join("")+
+        (folder!=="*"&&folder!==""&&!d.folders.some(function(x){return x.folder===folder})?'<button type="button" data-folder="'+esc(folder)+'" aria-pressed="true"><span>'+esc(folder)+'</span><span class="num">0</span></button>':'')+'</div>'+
+        '<div class="meter" role="img" aria-label="'+fmtBytes(d.usage.bytes)+' of '+fmtBytes(d.usage.free)+' free storage used"><i style="width:'+Math.max(pctUsed,0.5)+'%"></i></div><p class="hint" style="margin:0">'+fmtBytes(d.usage.bytes)+' of '+fmtBytes(d.usage.free)+' free space used</p></aside>'+
+      '<section class="stack"><div id="fPanel"></div><div class="drop" id="drop"><b>Drop files here</b><span>or use Upload. Images, video (up to 4 GB), PDFs and audio.</span><div id="fProg"></div></div>'+
+      '<div class="filters"><input type="search" id="fQ" placeholder="Search files"><select id="fK" style="width:auto"><option value="">Everything</option><option value="image">Images</option><option value="video">Video</option><option value="document">Documents</option></select></div>'+
+      '<div class="fgrid" id="fGrid"></div></section></div>';
+    v.innerHTML=html;
+    function draw(list){
+      $("#fGrid").innerHTML = list.length ? list.map(function(f){ return '<button type="button" class="fcard" data-f="'+esc(f.id)+'" aria-pressed="'+(open===f.id)+'"><span class="fthumb">'+thumb(f)+'</span><span class="fname">'+esc(f.name)+'</span><span class="fmeta">'+fmtBytes(f.size)+(f.width?' · '+f.width+'×'+f.height:'')+'</span></button>' }).join("")
+        : '<div class="empty"><b>No files here yet</b>Drop some in above.</div>';
+      $$("[data-f]").forEach(function(b){ b.onclick=function(){ open=b.dataset.f; panel(files.filter(function(x){return x.id===open})[0]); draw(list); window.scrollTo({top:0,behavior:"smooth"}) } });
+    }
+    function reload(){ var qs="folder="+encodeURIComponent(folder)+($("#fQ").value?"&q="+encodeURIComponent($("#fQ").value):"")+($("#fK").value?"&kind="+$("#fK").value:"");
+      return api("GET","files?"+qs).then(function(r){ files=r.files; draw(files) }) }
+    function panel(f){
+      var p=$("#fPanel"); if(!f){ p.innerHTML=""; return }
+      var folders=d.folders.map(function(x){return x.folder}).filter(Boolean);
+      p.innerHTML='<form class="drawer" id="fdForm" autocomplete="off"><h2 class="sec">'+esc(f.name)+' <span class="saving" id="fdSave">Saved</span></h2>'+
+        '<div class="fdetail"><div class="fbig">'+(f.kind==="image"?'<img src="'+esc(f.url)+'" alt="">':f.kind==="video"?'<video src="'+esc(f.url)+'" controls playsinline preload="metadata"></video>':'<span class="ftype">'+esc(f.name.split(".").pop().toUpperCase())+'</span>')+'</div>'+
+        '<div class="stack" style="gap:12px"><div class="field"><label for="fdName">Name</label><input type="text" id="fdName" maxlength="160" value="'+esc(f.name)+'"></div>'+
+        '<div class="field"><label for="fdFolder">Folder</label><input type="text" id="fdFolder" list="fdFolders" maxlength="60" value="'+esc(f.folder)+'" placeholder="Unfiled"><datalist id="fdFolders">'+folders.map(function(x){return '<option value="'+esc(x)+'">'}).join("")+'</datalist></div>'+
+        (f.kind==="image"?'<div class="field"><label for="fdAlt">Description</label><input type="text" id="fdAlt" maxlength="300" value="'+esc(f.alt)+'" placeholder="What’s in the picture"><span class="hint">Read out by screen readers and shown if the image doesn’t load.</span></div>':'')+
+        '<div class="field"><label for="fdUrl">Link</label><div class="affix"><input type="text" id="fdUrl" readonly value="'+esc(f.url)+'"><button class="btn sm" type="button" id="fdCopy" style="border:0;border-left:1px solid var(--line)">Copy</button></div></div>'+
+        '<p class="hint" style="margin:0">'+esc(f.type)+' · '+fmtBytes(f.size)+(f.width?' · '+f.width+'×'+f.height:'')+' · added '+fmtDate(f.created_at,true)+'</p>'+
+        '<div class="actions">'+((f.kind==="image"||f.kind==="video")?'<button class="btn sm" type="button" id="fdPost">Use in a social post</button>':'')+'<a class="btn sm" href="'+esc(f.url)+'" download="'+esc(f.name)+'" target="_blank" rel="noopener">Download</a><button class="btn sm danger" type="button" id="fdDel">Delete</button><button class="btn sm ghost" type="button" id="fdClose">Close</button></div><div id="fdConfirm"></div></div></div></form>';
+      var save=saver($("#fdSave"), function(x){ return api("PATCH","files/"+f.id,x).then(function(r){ Object.assign(f,r.file); var c=$('[data-f="'+f.id+'"] .fname'); if(c) c.textContent=f.name }) });
+      $("#fdName").oninput=function(){ save({name:this.value}) };
+      $("#fdFolder").onchange=function(){ save({folder:this.value}); save.now(); setTimeout(route,600) };
+      var al=$("#fdAlt"); if(al) al.oninput=function(){ save({alt:this.value}) };
+      $("#fdCopy").onclick=function(){ var i=$("#fdUrl"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){ toast("Link copied") },function(){ document.execCommand("copy"); toast("Link copied") }) };
+      $("#fdClose").onclick=function(){ open=null; panel(null); draw(files) };
+      var fp=$("#fdPost"); if(fp) fp.onclick=function(){ fp.disabled=true;
+        var brand=store("studio.brand");
+        (brand?Promise.resolve(brand):api("GET","social/brands").then(function(r){ return r.brands[0]&&r.brands[0]._id })).then(function(bid){
+          if(!bid) throw new Error("Set up a brand on the Social page first.");
+          return api("POST","social/posts",{profile_id:bid, targets:[]}).then(function(r){ return api("PATCH","social/posts/"+r.post.id,{media:[{url:f.url,type:f.kind==="video"?"video":(f.type==="image/gif"?"gif":"image"),name:f.name}]}) }).then(function(r){ go("#/social/p/"+r.post.id) });
+        }).catch(function(e){ fp.disabled=false; toast(e.message,true) }) };
+      $("#fdDel").onclick=function(){
+        $("#fdConfirm").innerHTML='<div class="confirm"><span>Delete '+esc(f.name)+'? Anything that uses it (emails already sent, pages, scheduled posts) will show a broken image.</span><button class="btn sm danger" type="button" id="fdY">Delete</button><button class="btn sm ghost" type="button" id="fdN">Keep it</button></div>';
+        $("#fdN").onclick=function(){ $("#fdConfirm").innerHTML="" };
+        $("#fdY").onclick=function(){ api("DELETE","files/"+f.id).then(function(){ toast("Deleted"); route() }).catch(function(e){ toast(e.message,true) }) };
+      };
+    }
+    function uploadList(list){
+      var target=folder==="*"?"":folder, prog=$("#fProg"), done=0;
+      list.reduce(function(ch,f){ return ch.then(function(){
+        var row=document.createElement("div"); row.className="prog"; row.innerHTML='<span>'+esc(f.name)+'</span><i><b style="width:0"></b></i>'; prog.appendChild(row);
+        return uploadToLibrary(f, target, function(x){ row.querySelector("b").style.width=Math.round(x*100)+"%" }).then(function(){ done++; row.remove() }).catch(function(e){ row.classList.add("bad"); row.querySelector("span").textContent=f.name+": "+e.message });
+      }) }, Promise.resolve()).then(function(){ if(done){ toast(done+" file"+(done===1?"":"s")+" added"); reload() } });
+    }
+    $("#fUp").onchange=function(){ var l=Array.prototype.slice.call(this.files); this.value=""; uploadList(l) };
+    var dz=$("#drop");
+    ["dragenter","dragover"].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.classList.add("over") }) });
+    ["dragleave","drop"].forEach(function(ev){ dz.addEventListener(ev,function(e){ e.preventDefault(); dz.classList.remove("over") }) });
+    dz.addEventListener("drop",function(e){ uploadList(Array.prototype.slice.call(e.dataTransfer.files||[])) });
+    $$("[data-folder]").forEach(function(b){ b.onclick=function(){ go(b.dataset.folder==="*"?"#/files":"#/files/"+encodeURIComponent(b.dataset.folder||"_")) } });
+    $("#newFolder").onclick=function(){
+      $("#nfHost").innerHTML='<form class="sheet" id="nfForm"><div class="field"><label for="nfName">Folder name</label><input type="text" id="nfName" required maxlength="60" placeholder="e.g. Ciúnas"></div><div class="actions"><button class="btn sm primary" type="submit">Open folder</button></div><p class="hint" style="margin:0">It appears once there’s a file in it.</p></form>';
+      $("#nfName").focus(); $("#nfForm").onsubmit=function(e){ e.preventDefault(); go("#/files/"+encodeURIComponent($("#nfName").value.trim()||"_")) };
+    };
+    var qt; $("#fQ").oninput=function(){ clearTimeout(qt); qt=setTimeout(reload,250) };
+    $("#fK").onchange=reload;
+    draw(files);
   });
 }
 
@@ -905,7 +1080,7 @@ function socialPostView(pid){
           (accounts.length ? accounts.map(function(a){ return '<button type="button" data-pick="'+esc(a.platform)+'" aria-pressed="'+(sel().indexOf(a.platform)>-1)+'">'+esc(platName(a.platform))+'</button>' }).join("") : '<span class="hint">No accounts connected for '+esc(brand.name)+'. <a href="#/social/b/'+esc(brand._id)+'">Connect one</a>.</span>')+'</div></div>'+
         '<div class="field"><label for="spText">Caption</label><textarea id="spText" class="code" style="min-height:200px" maxlength="70000">'+esc(p.content)+'</textarea><div class="counts" id="spCounts"></div></div>'+
         '<div class="field"><span class="label">Pictures and video</span><div class="media" id="spMedia"></div>'+
-          '<label class="btn sm" style="align-self:flex-start;cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Add files</label><span class="hint">Up to 100 MB each. Instagram, TikTok and Pinterest need at least one.</span></div>'+
+          '<div class="actions"><label class="btn sm" style="cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Upload</label>'+(S.me.files?'<button class="btn sm" type="button" id="spLib">From your files</button>':'')+'</div><span class="hint">'+(S.me.files?'Uploads are saved to your '+esc(brand.name)+' files too.':'Up to 100 MB each.')+' Instagram, TikTok and Pinterest need at least one.</span></div>'+
         '<div id="spExtras" class="stack" style="gap:14px"></div>'+
         '<h2 class="sec">Send</h2><ul class="probs" id="spProbs"></ul>'+
         '<div class="actions"><button class="btn primary" type="button" id="spNow">Post now</button><span class="muted">or</span><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto"><button class="btn" type="button" id="spSched">Schedule</button></div><div id="spSend"></div>'+
@@ -964,15 +1139,18 @@ function socialPostView(pid){
         p.targets = on ? p.targets.concat([{platform:pl, accountId:acctFor(pl)._id}]) : p.targets.filter(function(t){return t.platform!==pl});
         save({targets:p.targets}); save.now(); counts(); extras(); renderPreview();
       } });
+      var lib=$("#spLib"); if(lib) lib.onclick=function(){ pickFromLibrary({multiple:true, folder:brand.name}).then(function(fs){ fs.forEach(function(nf){ if(nf.kind!=="image"&&nf.kind!=="video") return; p.media.push({url:nf.url, type:nf.kind==="video"?"video":(nf.type==="image/gif"?"gif":"image"), name:nf.name}) }); if(fs.length){ mediaList(); save({media:p.media}); save.now(); extras(); renderPreview() } }) };
       $("#spText").oninput=function(){ p.content=this.value; save({content:this.value}); counts(); renderPreview() };
       $("#spFile").onchange=function(){
         var files=Array.prototype.slice.call(this.files); this.value="";
         files.reduce(function(chain,f){ return chain.then(function(){
-          if(f.size>100*1024*1024){ toast(f.name+" is over 100 MB. Make it smaller first.",true); return }
+          if(!S.me.files && f.size>100*1024*1024){ toast(f.name+" is over 100 MB. Make it smaller first.",true); return }
           toast("Uploading "+f.name+"…");
-          return fetch("/api/social/media",{method:"POST",headers:{"content-type":f.type||"application/octet-stream","x-filename":encodeURIComponent(f.name)},body:f})
-            .then(function(res){ return res.json().then(function(d){ if(!res.ok) throw new Error(d.error||"Upload failed"); return d }) })
-            .then(function(d){ p.media.push(d.media); mediaList(); save({media:p.media}); save.now(); extras(); renderPreview(); toast(f.name+" added") })
+          var up = S.me.files
+            ? uploadToLibrary(f, brand.name).then(function(nf){ return {url:nf.url, type:nf.kind==="video"?"video":(nf.type==="image/gif"?"gif":"image"), name:nf.name} })
+            : fetch("/api/social/media",{method:"POST",headers:{"content-type":f.type||"application/octet-stream","x-filename":encodeURIComponent(f.name)},body:f})
+              .then(function(res){ return res.json().then(function(d){ if(!res.ok) throw new Error(d.error||"Upload failed"); return d.media }) });
+          return up.then(function(m){ p.media.push(m); mediaList(); save({media:p.media}); save.now(); extras(); renderPreview(); toast(f.name+" added") })
             .catch(function(e){ toast(e.message,true) });
         }) }, Promise.resolve());
       };

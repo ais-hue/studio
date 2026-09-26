@@ -94,3 +94,4 @@ footer a{color:var(--faint)}
 
 .notice{border:1px solid var(--rule);border-left:6px solid var(--pc);padding:16px 18px;max-width:560px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.prose img{display:block;max-width:100%;height:auto;margin:1.4em 0;border:1px solid var(--line, currentColor)}

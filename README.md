@@ -11,6 +11,7 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 - **Sign-ups** land on the site's list. With double opt-in on (Settings), they wait as "pending" until they tap the link sent to `go.<domain>/confirm/…`.
 - **Automations** start when someone joins a list, clicks a link in a campaign, or is added by hand. The every-minute cron moves people along and queues each email; the send queue delivers it.
 - **Social posts** go out through Zernio (zernio.com). Brands are Zernio profiles; drafts live in Studio, and scheduled posts are handed to Zernio and checked on by the cron.
+- **Files** live in R2 (binding `FILES`, bucket `studio-files`) and are served publicly at `files.<domain>/<key>`. Big files upload in 50 MB parts.
 - **Bounces and spam reports** come back from Resend to `go.<domain>/hooks/resend` (signed, checked against the signing secret). Hard bounces and complaints stop all email to that address and take it out of automations.
 
 ## Deploying

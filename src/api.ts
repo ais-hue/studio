@@ -5,6 +5,7 @@ import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sen
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
+import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
@@ -100,7 +101,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   const t = now();
 
   /* ---------- overview ---------- */
-  if (a === "me") return json({ email: user, root: env.ROOT_DOMAIN, emailConnected: !!env.RESEND_API_KEY || env.DEV_AUTH === "1", dev: env.DEV_AUTH === "1", version: VERSION });
+  if (a === "me") return json({ email: user, root: env.ROOT_DOMAIN, emailConnected: !!env.RESEND_API_KEY || env.DEV_AUTH === "1", dev: env.DEV_AUTH === "1", version: VERSION, files: !!env.FILES });
 
   if (a === "overview" && m === "GET") {
     const since = t - 30 * 864e5;
@@ -584,6 +585,40 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     return json({ ok: true });
   }
 
+
+  /* ---------- file library ---------- */
+  if (a === "files") {
+    const getFile = async (fid: string) => {
+      const f = await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>();
+      if (!f) throw new HttpError(404, "That file doesn’t exist any more.");
+      return f;
+    };
+    if (!b && m === "GET") {
+      const q = str(url.searchParams.get("q"), 100), folder = url.searchParams.get("folder"), kind = str(url.searchParams.get("kind"), 20);
+      const where = ["status = 'ready'"], vals: unknown[] = [];
+      if (q) { where.push("(name LIKE ? OR alt LIKE ?)"); vals.push(`%${q}%`, `%${q}%`); }
+      if (folder !== null && folder !== "*") { where.push("folder = ?"); vals.push(folder); }
+      if (kind) { where.push("kind = ?"); vals.push(kind); }
+      const [rows, folders, usage] = await env.DB.batch([
+        env.DB.prepare(`SELECT * FROM files WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 300`).bind(...vals),
+        env.DB.prepare("SELECT folder, COUNT(*) AS n FROM files WHERE status = 'ready' GROUP BY folder ORDER BY folder"),
+        env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(size),0) AS bytes FROM files WHERE status = 'ready'"),
+      ]);
+      return json({ files: (rows.results as FileRow[]).map((f) => fileView(env, f)), folders: folders.results, usage: { ...(usage.results[0] as any), free: FREE_BYTES }, enabled: !!env.FILES });
+    }
+    if (!b && m === "POST") return json({ file: fileView(env, await uploadSmall(env, req)) }, 201);
+    if (b === "big" && !c && m === "POST") { const r = await startBig(env, req); return json({ file: fileView(env, r.file), partSize: r.partSize }, 201); }
+    if (b && c === "parts" && seg[3] && m === "PUT") return json(await uploadPart(env, req, b, Number(seg[3])));
+    if (b && c === "finish" && m === "POST") { const d = await body(req); return json({ file: fileView(env, await finishBig(env, b, Array.isArray(d.parts) ? d.parts : [])) }); }
+    if (b && !c && m === "PATCH") {
+      const f = await getFile(b);
+      const d = await body(req);
+      await env.DB.prepare("UPDATE files SET name = ?, folder = ?, alt = ?, updated_at = ? WHERE id = ?").bind(
+        d.name !== undefined ? str(d.name, 160) || f.name : f.name, d.folder !== undefined ? str(d.folder, 60) : f.folder, d.alt !== undefined ? str(d.alt, 300) : f.alt, t, f.id).run();
+      return json({ file: fileView(env, await getFile(f.id)) });
+    }
+    if (b && !c && m === "DELETE") { await removeFile(env, await getFile(b)); return json({ ok: true }); }
+  }
 
   /* ---------- social ---------- */
   if (a === "social") {
