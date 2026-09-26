@@ -195,7 +195,7 @@ button.rowi{background:var(--surface);border:0;border-bottom:1px solid var(--lin
 .form.panel{padding:0 0 18px}
 .form.panel>*:not(h2){margin-inline:18px}
 .field{display:flex;flex-direction:column;gap:6px;min-width:0}
-.field>label:not(.check),.field>.label{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--t2)}
+.field>label:not(.check):not(.btn),.field>.label{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--t2)}
 .hint{font-size:12px;color:var(--t3)}
 input[type=text],input[type=email],input[type=search],input[type=datetime-local],select,textarea{width:100%;background:var(--field);border:1px solid var(--line2);padding:8px 11px;font-size:13.5px;color:var(--t1)}
 input::placeholder,textarea::placeholder{color:var(--t3)}
@@ -313,3 +313,44 @@ input[type=number],input[type=password]{background:var(--field);border:1px solid
 input[type=number]:focus,input[type=password]:focus{outline:none;border-color:var(--coral)}
 .drawer h2.sec+.tablewrap{margin-top:-14px}
 .updbar{position:fixed;right:20px;bottom:20px;z-index:30;max-width:min(420px,calc(100% - 32px));box-shadow:0 6px 24px rgba(14,22,40,.18)}
+
+/* ---------- social ---------- */
+.tabs button{border:0;background:none}
+.plats{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+.plat{display:flex;flex-direction:column;gap:4px;align-items:flex-start;padding:14px 18px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 -1px -1px 0}
+.plat .pn{font-weight:600;font-size:13.5px}
+.plat .pu{font-size:12px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.plat.on .pn::before{content:"";display:inline-block;width:8px;height:8px;background:var(--good);margin-right:8px;vertical-align:1px}
+.plat .btn{margin-top:4px}
+.plat .btn.ghost{padding-inline:0}
+.editor.wide{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+@media (max-width:1100px){.editor,.editor.wide{grid-template-columns:1fr}}
+.picks{display:flex;flex-wrap:wrap;gap:8px}
+.picks button{border:1px solid var(--line2);background:var(--field);padding:6px 12px;cursor:pointer;font-size:13px;color:var(--t2)}
+.picks button[aria-pressed="true"]{border-color:var(--coral);background:var(--coral);color:var(--on-coral);font-weight:600}
+.counts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
+.counts .over{color:var(--danger);font-weight:600}
+.media{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
+.media:empty{display:none}
+.media figure{margin:0;border:1px solid var(--line);background:var(--soft);display:flex;flex-direction:column}
+.media img,.media video{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--line)}
+.media figcaption{font-size:11px;color:var(--t3);padding:4px 8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.media .btn{align-self:flex-start;margin:0 2px 2px}
+fieldset.xtra{border:1px solid var(--line);margin:0;padding:12px 14px 14px;display:flex;flex-direction:column;gap:12px}
+fieldset.xtra legend{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--eyebrow);padding:0 6px}
+.probs{margin:0;padding-left:20px;color:var(--warn);font-size:13px;display:flex;flex-direction:column;gap:4px}
+.probs:empty{display:none}
+.err{color:var(--danger) !important}
+.spprev{padding:24px;background:var(--soft);min-height:300px}
+.pcard{max-width:460px;margin:0 auto;background:var(--surface);border:1px solid var(--line)}
+.phead{display:flex;gap:10px;align-items:center;padding:12px 14px}
+.phead b{display:block;font-size:13.5px}
+.phead small{display:block;font-size:12px;color:var(--t3)}
+.pav{width:34px;height:34px;flex:none;background:var(--t1);color:var(--bg);display:grid;place-items:center;font-weight:600}
+.ptext{margin:0;padding:0 14px 12px;white-space:pre-wrap;word-wrap:break-word;font-size:14px}
+.pgrid{display:grid;gap:2px;background:var(--line)}
+.pgrid.n2,.pgrid.n4{grid-template-columns:1fr 1fr}
+.pgrid.n3{grid-template-columns:2fr 1fr}
+.pgrid.n3>:first-child{grid-row:span 2}
+.pgrid img,.pgrid video{width:100%;height:100%;aspect-ratio:1;object-fit:cover;display:block}
+.pgrid.n1 img,.pgrid.n1 video{aspect-ratio:auto;max-height:520px}

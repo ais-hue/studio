@@ -27,6 +27,9 @@ export const SCHEMA: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_enroll_c ON enrollments(contact_id)",
  "CREATE INDEX IF NOT EXISTS idx_sends_provider ON sends(provider_id)",
  "CREATE INDEX IF NOT EXISTS idx_events_time ON email_events(created_at)",
+ "CREATE TABLE IF NOT EXISTS social_posts ( id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', media TEXT NOT NULL DEFAULT '[]', targets TEXT NOT NULL DEFAULT '[]', options TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'draft', scheduled_at INTEGER, published_at INTEGER, zernio_id TEXT, results TEXT NOT NULL DEFAULT '[]', error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_social_profile ON social_posts(profile_id, status)",
+ "CREATE INDEX IF NOT EXISTS idx_social_due ON social_posts(status, scheduled_at)",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",

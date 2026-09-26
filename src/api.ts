@@ -5,6 +5,7 @@ import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sen
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
+import { PLATFORMS, SocialPost, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -583,6 +584,97 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     return json({ ok: true });
   }
 
+
+  /* ---------- social ---------- */
+  if (a === "social") {
+    const s1 = seg[1], s2 = seg[2], s3 = seg[3];
+    if (s1 === "status" && m === "GET") return json({ ...(await socialReady(env)), platforms: PLATFORMS });
+    if (s1 === "brands" && !s2 && m === "GET") return json({ brands: await listProfiles(env) });
+    if (s1 === "brands" && !s2 && m === "POST") {
+      const d = await body(req);
+      const name = str(d.name, 60);
+      if (!name) throw new HttpError(400, "Give the brand a name.");
+      return json({ brand: await createProfile(env, name) }, 201);
+    }
+    if (s1 === "brands" && s2 && s3 === "accounts" && m === "GET") return json({ accounts: await listAccounts(env, s2) });
+    if (s1 === "brands" && s2 && s3 === "connect" && m === "POST") {
+      const d = await body(req);
+      const back = `https://${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
+      const localBack = `${url.protocol}//${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
+      return json({ url: await connectUrl(env, str(d.platform, 20), s2, url.protocol === "https:" ? back : localBack) });
+    }
+    if (s1 === "accounts" && s2 && !s3 && m === "DELETE") { await disconnect(env, s2); return json({ ok: true }); }
+    if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
+    if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2) });
+    if (s1 === "media" && m === "POST") return json({ media: await uploadMedia(env, req) }, 201);
+
+    if (s1 === "posts") {
+      const view = (p: SocialPost) => ({ ...p, media: parseJson(p.media, []), targets: parseJson(p.targets, []), options: parseJson(p.options, {}), results: parseJson(p.results, []), problems: problems(p) });
+      const get = async (pid: string) => {
+        const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>();
+        if (!p) throw new HttpError(404, "That post doesn’t exist any more.");
+        return p;
+      };
+      if (!s2 && m === "GET") {
+        const brand = str(url.searchParams.get("brand"), 80);
+        const { results } = await env.DB.prepare(`SELECT * FROM social_posts WHERE profile_id = ? ORDER BY
+          CASE status WHEN 'failed' THEN 0 WHEN 'partial' THEN 0 WHEN 'publishing' THEN 1 WHEN 'scheduled' THEN 2 WHEN 'draft' THEN 3 ELSE 4 END,
+          CASE WHEN status IN ('scheduled','publishing') THEN scheduled_at END ASC, updated_at DESC LIMIT 200`).bind(brand).all<SocialPost>();
+        return json({ posts: results.map(view) });
+      }
+      if (!s2 && m === "POST") {
+        const d = await body(req);
+        const brand = str(d.profile_id, 80);
+        if (!brand) throw new HttpError(400, "Pick a brand first.");
+        const pid = id("sp_");
+        const targets = Array.isArray(d.targets) ? d.targets.slice(0, 10).map((x: any) => ({ platform: str(x.platform, 20), accountId: str(x.accountId, 80) })) : [];
+        await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, targets, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind(pid, brand, str(d.content, 5000), JSON.stringify(targets), t, t).run();
+        return json({ post: view(await get(pid)) }, 201);
+      }
+      if (s2 && !s3 && m === "GET") {
+        let p = await get(s2);
+        if (p.zernio_id && ["publishing", "scheduled"].includes(p.status) && (p.scheduled_at || 0) <= t) { await syncSocial(env, p.id); p = await get(s2); }
+        return json({ post: view(p) });
+      }
+      if (s2 && !s3 && m === "PATCH") {
+        const p = await get(s2);
+        if (!["draft", "failed"].includes(p.status) || p.zernio_id) {
+          if (p.status !== "draft") throw new HttpError(409, p.status === "scheduled" ? "This post is scheduled. Unschedule it to make changes." : "This post has gone out, so it can’t be changed. Duplicate it instead.");
+        }
+        const d = await body(req);
+        const content = d.content !== undefined ? String(d.content).slice(0, 70000) : p.content;
+        const media = d.media !== undefined ? JSON.stringify((Array.isArray(d.media) ? d.media : []).slice(0, 35).map((x: any) => ({ url: str(x.url, 1000), type: str(x.type, 10), name: str(x.name, 120) })).filter((x: any) => /^https:\/\//.test(x.url))) : p.media;
+        const targets = d.targets !== undefined ? JSON.stringify((Array.isArray(d.targets) ? d.targets : []).slice(0, 10).map((x: any) => ({ platform: str(x.platform, 20), accountId: str(x.accountId, 80) })).filter((x: any) => PLATFORMS[x.platform] && x.accountId)) : p.targets;
+        const options = d.options !== undefined ? JSON.stringify(d.options || {}).slice(0, 5000) : p.options;
+        await env.DB.prepare("UPDATE social_posts SET content = ?, media = ?, targets = ?, options = ?, updated_at = ? WHERE id = ?").bind(content, media, targets, options, t, p.id).run();
+        return json({ post: view(await get(p.id)) });
+      }
+      if (s2 && !s3 && m === "DELETE") {
+        const p = await get(s2);
+        if (p.status === "scheduled") await unschedule(env, p);
+        if (p.status === "publishing") throw new HttpError(409, "This post is going out right now. Try again in a minute.");
+        await env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id).run();
+        return json({ ok: true });
+      }
+      if (s2 && s3 === "publish" && m === "POST") {
+        const d = await body(req);
+        const at = d.at ? Number(d.at) : null;
+        if (at !== null && !(at > t + 60_000)) throw new HttpError(400, "Pick a time at least a couple of minutes from now.");
+        await publish(env, await get(s2), at);
+        return json({ post: view(await get(s2)) });
+      }
+      if (s2 && s3 === "unschedule" && m === "POST") { await unschedule(env, await get(s2)); return json({ post: view(await get(s2)) }); }
+      if (s2 && s3 === "duplicate" && m === "POST") {
+        const p = await get(s2);
+        const pid = id("sp_");
+        await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(pid, p.profile_id, p.content, p.media, p.targets, p.options, t, t).run();
+        return json({ post: view(await get(pid)) }, 201);
+      }
+    }
+  }
+
   /* ---------- settings ---------- */
   if (a === "settings") {
     const visible = async () => {
@@ -597,6 +689,15 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b === "connect-resend" && m === "POST") {
       const r = await connectResendWebhook(env);
       if (!r.ok) return json({ error: r.error, needsManual: r.needsManual }, 409);
+      return json({ ok: true });
+    }
+    if (b === "zernio-key" && m === "PUT") {
+      const d = await body(req);
+      const key = str(d.key, 200);
+      if (!key) { await env.DB.prepare("DELETE FROM settings WHERE key = 'zernio_api_key'").run(); return json({ ok: true }); }
+      if (!/^sk_[A-Za-z0-9]{20,}$/.test(key)) throw new HttpError(400, "That doesn’t look like a Zernio API key. It starts with sk_.");
+      await testKey(env, key);
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('zernio_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key).run();
       return json({ ok: true });
     }
     if (b === "webhook-secret" && m === "PUT") {

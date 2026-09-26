@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609262230";
+var VERSION = "202609262250";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -88,7 +88,7 @@ function checkVersion(){
 setInterval(checkVersion, 5*60*1000);
 document.addEventListener("visibilitychange", function(){ if(!document.hidden) checkVersion() });
 function markNav(){
-  var parts=(location.hash.replace(/^#\/?/,"")||"").split("/").filter(Boolean), top=parts[0]||"overview";
+  var parts=(location.hash.replace(/^#\/?/,"").split("?")[0]||"").split("/").filter(Boolean), top=parts[0]||"overview";
   $$("[data-nav]").forEach(function(a){ a.setAttribute("aria-current", a.dataset.nav===top && !(top==="sites"&&parts[1]&&parts[1]!=="new") ? "page" : "false") });
   $$("[data-site]").forEach(function(a){ a.setAttribute("aria-current", top==="sites"&&parts[1]===a.dataset.site ? "page" : "false") });
 }
@@ -96,7 +96,7 @@ function markNav(){
 /* ============ router ============ */
 function route(){
   S.cleanup.forEach(function(f){ try{f()}catch(e){} }); S.cleanup=[];
-  var parts = (location.hash.replace(/^#\/?/,"")||"").split("/").filter(Boolean);
+  var parts = (location.hash.replace(/^#\/?/,"").split("?")[0]||"").split("/").filter(Boolean);
   var top = parts[0]||"overview";
   markNav();
   var v=$("#view"); v.innerHTML='<div class="loading">Loading…</div>';
@@ -110,6 +110,8 @@ function route(){
   else if(top==="emails") p=emailsView();
   else if(top==="automations" && parts[1]) p=automationView(parts[1], parts[2]);
   else if(top==="automations") p=automationsView();
+  else if(top==="social" && parts[1]==="p" && parts[2]) p=socialPostView(parts[2]);
+  else if(top==="social") p=socialView(parts[1]==="b"?parts[2]:null);
   else if(top==="settings") p=settingsView();
   else p=Promise.resolve(v.innerHTML='<div class="empty"><b>Page not found</b><a href="#/">Go to the overview</a></div>');
   Promise.resolve(p).catch(function(e){ v.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p><button class="btn sm" type="button" onclick="location.reload()">Reload</button></div>' });
@@ -799,10 +801,216 @@ function automationView(qid, stepParam){
   });
 }
 
+/* ============ social ============ */
+var PLAT_ORDER = ["instagram","tiktok","linkedin","threads","bluesky","twitter","pinterest","facebook"];
+var SOCIAL_STATUS = { draft:"Draft", scheduled:"Scheduled", publishing:"Posting", published:"Posted", partial:"Partly posted", failed:"Failed" };
+function socialChip(st){ var cls = st==="published"?"sent": st==="partial"||st==="failed"?"failed": st==="scheduled"||st==="publishing"?"scheduled":"draft"; return '<span class="chip '+cls+'">'+esc(SOCIAL_STATUS[st]||st)+'</span>' }
+function hashQuery(){ var i=location.hash.indexOf("?"); return new URLSearchParams(i>-1?location.hash.slice(i+1):"") }
+function platName(p){ return (S.social&&S.social.platforms[p]&&S.social.platforms[p].name)||p }
+function loadSocialMeta(){ return S.social ? Promise.resolve(S.social) : api("GET","social/status").then(function(d){ S.social=d; return d }) }
+
+function socialView(brandParam){
+  return loadSocialMeta().then(function(meta){
+    var v=$("#view");
+    if(!meta.connected){
+      v.innerHTML=head("Marketing","Social","Write once, post to every account, now or on a schedule.")+
+        '<div class="panel"><div class="pad stack" style="gap:12px"><p style="margin:0"><b>Connect Zernio to start.</b> Zernio is the service that does the posting. You link each account once with the normal “log in with Instagram” screen, all from here.</p>'+
+        '<p class="hint" style="margin:0">Your first 2 accounts are free, then it’s $6 a month per account. X charges a few cents per post on top.</p>'+
+        '<div class="actions"><a class="btn primary" href="#/settings">Add your Zernio key in Settings</a></div></div></div>';
+      return;
+    }
+    return api("GET","social/brands").then(function(bd){
+      var brands=bd.brands, want=brandParam||store("studio.brand");
+      var brand=brands.filter(function(b){return b._id===want})[0]||brands[0];
+      var q=hashQuery();
+      if(q.get("connected")) toast(platName(q.get("connected"))+" connected"+(q.get("username")?" as "+q.get("username"):""));
+      if(q.get("error")) toast("That didn’t connect: "+(q.get("error_message")||q.get("error")), true);
+      if(q.toString()) history.replaceState(null,"","#/social"+(brand?"/b/"+brand._id:""));
+      if(!brand){
+        v.innerHTML=head("Marketing","Social","Write once, post to every account, now or on a schedule.")+'<form class="sheet" id="brandForm"><h3>Add your first brand</h3><p class="hint" style="margin:0">A brand holds one account per platform, like Ciúnas’s Instagram, TikTok and LinkedIn.</p><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Ciúnas"></div><div class="actions"><button class="btn primary" type="submit">Create brand</button></div></form>';
+        $("#brandForm").onsubmit=function(e){ e.preventDefault(); api("POST","social/brands",{name:$("#bName").value}).then(function(r){ store("studio.brand",r.brand._id); go("#/social/b/"+r.brand._id) }).catch(function(e){ toast(e.message,true) }) };
+        return;
+      }
+      store("studio.brand",brand._id);
+      return Promise.all([api("GET","social/brands/"+brand._id+"/accounts"), api("GET","social/posts?brand="+encodeURIComponent(brand._id))]).then(function(r){
+        var accounts=r[0].accounts, posts=r[1].posts;
+        var byPlat={}; accounts.forEach(function(a){ byPlat[a.platform]=a });
+        var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>');
+        if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
+        html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
+        html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. First 2 free, then $6/month each on Zernio.</span></h2><div class="plats">'+
+          PLAT_ORDER.map(function(p){ var a=byPlat[p];
+            return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
+              (a ? '<span class="pu">@'+esc(a.username)+(a.active?'':' · needs reconnecting')+'</span><button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
+                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section>';
+        var groups=[["Needs attention",function(p){return p.status==="failed"||p.status==="partial"}],["Coming up",function(p){return p.status==="scheduled"||p.status==="publishing"}],["Drafts",function(p){return p.status==="draft"}],["Posted",function(p){return p.status==="published"}]];
+        if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
+        groups.forEach(function(g){
+          var list=posts.filter(g[1]); if(!list.length) return;
+          html+='<section class="panel"><h2 class="sec">'+g[0]+' <span class="hint">'+list.length+'</span></h2><div class="rows">'+list.map(function(p){
+            var when = p.status==="draft" ? "Edited "+fmtDate(p.updated_at,true) : p.status==="published"||p.status==="partial" ? fmtDate(p.published_at||p.scheduled_at,true) : fmtDate(p.scheduled_at,true);
+            var first=(p.content||"").split("\n")[0]||(p.media.length?"Picture post":"Empty post");
+            return '<a class="rowi nosq" href="#/social/p/'+esc(p.id)+'"><span class="t">'+esc(first)+'<small>'+esc(when)+' · '+esc(p.targets.map(function(t){return platName(t.platform)}).join(", ")||"No accounts picked")+(p.media.length?' · '+p.media.length+' media':'')+'</small></span><span class="meta">'+socialChip(p.status)+'</span></a>' }).join("")+'</div></section>';
+        });
+        v.innerHTML=html;
+        $("#newPost").onclick=function(){ this.disabled=true; api("POST","social/posts",{profile_id:brand._id, targets:accounts.map(function(a){ return {platform:a.platform, accountId:a._id} })}).then(function(r){ go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
+        $("#addBrand").onclick=function(){
+          $("#brandHost").innerHTML='<form class="sheet" id="brandForm"><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Seek"></div><div class="actions"><button class="btn primary sm" type="submit">Create brand</button><button class="btn ghost sm" type="button" id="bCancel">Cancel</button></div></form>';
+          $("#bName").focus(); $("#bCancel").onclick=function(){ $("#brandHost").innerHTML="" };
+          $("#brandForm").onsubmit=function(e){ e.preventDefault(); api("POST","social/brands",{name:$("#bName").value}).then(function(r){ go("#/social/b/"+r.brand._id) }).catch(function(e){ toast(e.message,true) }) };
+        };
+        $$("[data-conn]").forEach(function(b){ b.onclick=function(){ b.disabled=true; b.textContent="Opening…";
+          api("POST","social/brands/"+brand._id+"/connect",{platform:b.dataset.conn}).then(function(r){ location.href=r.url }).catch(function(e){ b.disabled=false; b.textContent="Connect"; toast(e.message,true) }) } });
+        $$("[data-disc]").forEach(function(b){ b.onclick=function(){
+          $("#discHost").innerHTML='<div class="confirm" style="margin:0 18px 16px"><span>Disconnect '+esc(platName(b.dataset.plat))+'? Scheduled posts for it will fail. You can connect it again any time.</span><button class="btn sm danger" type="button" id="dcYes">Disconnect</button><button class="btn sm ghost" type="button" id="dcNo">Keep it</button></div>';
+          $("#dcNo").onclick=function(){ $("#discHost").innerHTML="" };
+          $("#dcYes").onclick=function(){ api("DELETE","social/accounts/"+b.dataset.disc).then(function(){ toast("Disconnected"); route() }).catch(function(e){ toast(e.message,true) }) };
+        } });
+      });
+    });
+  });
+}
+
+function socialPostView(pid){
+  return loadSocialMeta().then(function(meta){ return api("GET","social/posts/"+pid) }).then(function(r){
+    var p=r.post;
+    return Promise.all([api("GET","social/brands"), api("GET","social/brands/"+p.profile_id+"/accounts")]).then(function(rr){
+      var brand=rr[0].brands.filter(function(b){return b._id===p.profile_id})[0]||{name:"Brand",_id:p.profile_id}, accounts=rr[1].accounts;
+      var v=$("#view"), editable=p.status==="draft";
+      var sel=function(){ return p.targets.map(function(t){return t.platform}) };
+      var acctFor=function(pl){ return accounts.filter(function(a){return a.platform===pl})[0] };
+      var where=function(){ return sel().map(platName).join(", ") };
+      var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/social/b/'+esc(brand._id)+'" style="color:inherit;text-decoration:none">Social · '+esc(brand.name)+'</a></span><h1>'+(editable?"Write a post":esc(SOCIAL_STATUS[p.status]||p.status))+'</h1>'+
+        '<p class="sub">'+socialChip(p.status)+' '+(p.status==="scheduled"?"Goes out "+fmtDate(p.scheduled_at,true):p.published_at?"Went out "+fmtDate(p.published_at,true):"")+'</p></div>'+
+        '<div class="actions"><button class="btn" type="button" id="spDup">Duplicate</button><button class="btn danger" type="button" id="spDel">Delete</button></div></div><div id="spConfirm"></div>';
+      if(p.error && editable) html+='<div class="notice danger"><p>Last try didn’t go out: '+esc(p.error)+'</p></div>';
+      if(!editable){
+        html+='<div class="editor"><div class="stack">';
+        if(p.status==="scheduled") html+='<div class="notice"><p>Scheduled for <b>'+fmtDate(p.scheduled_at,true)+'</b>. To change anything, pull it back to a draft first.</p><button class="btn sm" type="button" id="spUnsched">Unschedule</button></div>';
+        if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
+        html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
+          return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
+        if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
+        html+='</div><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
+        v.innerHTML=html;
+        renderPreview();
+        var us=$("#spUnsched"); if(us) us.onclick=function(){ api("POST","social/posts/"+pid+"/unschedule").then(function(){ toast("Back to draft"); route() }).catch(function(e){ toast(e.message,true) }) };
+        var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Trying again"); route() }).catch(function(e){ toast(e.message,true); rt.disabled=false }) };
+        if(p.status==="publishing"||(p.status==="scheduled"&&p.scheduled_at<Date.now()+120000)){ var poll=setInterval(route, 8000); S.cleanup.push(function(){ clearInterval(poll) }) }
+        common(); return;
+      }
+
+      html+='<div class="editor wide"><form class="form panel" id="spForm" autocomplete="off"><h2 class="sec">Post <span class="saving" id="spSave">Saved</span></h2>'+
+        '<div class="field"><span class="label">Post to</span><div class="picks" role="group" aria-label="Accounts">'+
+          (accounts.length ? accounts.map(function(a){ return '<button type="button" data-pick="'+esc(a.platform)+'" aria-pressed="'+(sel().indexOf(a.platform)>-1)+'">'+esc(platName(a.platform))+'</button>' }).join("") : '<span class="hint">No accounts connected for '+esc(brand.name)+'. <a href="#/social/b/'+esc(brand._id)+'">Connect one</a>.</span>')+'</div></div>'+
+        '<div class="field"><label for="spText">Caption</label><textarea id="spText" class="code" style="min-height:200px" maxlength="70000">'+esc(p.content)+'</textarea><div class="counts" id="spCounts"></div></div>'+
+        '<div class="field"><span class="label">Pictures and video</span><div class="media" id="spMedia"></div>'+
+          '<label class="btn sm" style="align-self:flex-start;cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Add files</label><span class="hint">Up to 100 MB each. Instagram, TikTok and Pinterest need at least one.</span></div>'+
+        '<div id="spExtras" class="stack" style="gap:14px"></div>'+
+        '<h2 class="sec">Send</h2><ul class="probs" id="spProbs"></ul>'+
+        '<div class="actions"><button class="btn primary" type="button" id="spNow">Post now</button><span class="muted">or</span><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto"><button class="btn" type="button" id="spSched">Schedule</button></div><div id="spSend"></div>'+
+        '</form><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
+      v.innerHTML=html;
+
+      var save=saver($("#spSave"), function(x){ return api("PATCH","social/posts/"+pid,x).then(function(res){ p.problems=res.post.problems; showProblems() }) });
+      function counts(){
+        var n=$("#spText").value.length;
+        $("#spCounts").innerHTML=sel().map(function(pl){ var lim=S.social.platforms[pl].limit, over=n>lim; return '<span class="'+(over?"over":"")+'">'+esc(platName(pl))+' '+n.toLocaleString()+'/'+lim.toLocaleString()+'</span>' }).join("");
+      }
+      function showProblems(){ var ul=$("#spProbs"); if(!ul) return; ul.innerHTML=(p.problems||[]).map(function(x){ return '<li>'+esc(x)+'</li>' }).join(""); $("#spNow").disabled=$("#spSched").disabled=!!(p.problems&&p.problems.length) }
+      function mediaList(){
+        $("#spMedia").innerHTML=p.media.map(function(m,i){ return '<figure>'+(m.type==="video"?'<video src="'+esc(m.url)+'" muted playsinline preload="metadata"></video>':'<img src="'+esc(m.url)+'" alt="">')+'<figcaption>'+esc(m.name||m.type)+'</figcaption><button type="button" class="btn sm ghost" data-rm="'+i+'" aria-label="Remove '+esc(m.name||"file")+'">Remove</button></figure>' }).join("");
+        $$("[data-rm]").forEach(function(b){ b.onclick=function(){ p.media.splice(Number(b.dataset.rm),1); mediaList(); save({media:p.media}); save.now(); renderPreview() } });
+      }
+      function extras(){
+        var h='', o=p.options;
+        if(sel().indexOf("pinterest")>-1){
+          o.pinterest=o.pinterest||{};
+          h+='<fieldset class="xtra"><legend>Pinterest</legend><div class="field"><label for="pinBoard">Board</label><select id="pinBoard"><option value="">Loading boards…</option></select></div>'+
+            '<div class="fieldrow"><div class="field"><label for="pinTitle">Pin title</label><input type="text" id="pinTitle" maxlength="100" value="'+esc(o.pinterest.title||"")+'" placeholder="First line of the caption"></div>'+
+            '<div class="field"><label for="pinLink">Link</label><input type="text" id="pinLink" maxlength="500" value="'+esc(o.pinterest.link||"")+'" placeholder="https://"></div></div></fieldset>';
+        }
+        if(sel().indexOf("tiktok")>-1){
+          o.tiktok=o.tiktok||{};
+          h+='<fieldset class="xtra"><legend>TikTok</legend><div class="field"><label for="tkPriv">Who can see it</label><select id="tkPriv"><option value="">Loading…</option></select></div>'+
+            '<label class="check"><input type="checkbox" id="tkCom"'+(o.tiktok.allow_comment===false?"":" checked")+'> Allow comments</label>'+
+            (p.media.some(function(m){return m.type==="video"}) ? '<label class="check"><input type="checkbox" id="tkDuet"'+(o.tiktok.allow_duet===false?"":" checked")+'> Allow duets</label><label class="check"><input type="checkbox" id="tkStitch"'+(o.tiktok.allow_stitch===false?"":" checked")+'> Allow stitches</label>' : '')+
+            '<label class="check"><input type="checkbox" id="tkBrand"'+(o.tiktok.brand?" checked":"")+'> This promotes my own brand or business</label>'+
+            '<label class="check"><input type="checkbox" id="tkOk"'+(o.tiktok.consent?" checked":"")+'> By posting, I agree to TikTok’s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>'+(o.tiktok.brand?' and <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a>':'')+'.</label></fieldset>';
+        }
+        $("#spExtras").innerHTML=h;
+        var setO=function(){ save({options:p.options}) };
+        if($("#pinBoard")){
+          var acc=acctFor("pinterest");
+          api("GET","social/accounts/"+acc._id+"/boards").then(function(d){ var s=$("#pinBoard"); if(!s) return; s.innerHTML='<option value="">Pick a board</option>'+d.boards.map(function(b){ return '<option value="'+esc(b.id)+'"'+(p.options.pinterest.boardId===b.id?" selected":"")+'>'+esc(b.name)+'</option>' }).join("") }).catch(function(e){ var s=$("#pinBoard"); if(s) s.innerHTML='<option value="">Couldn’t load boards</option>'; toast(e.message,true) });
+          $("#pinBoard").onchange=function(){ p.options.pinterest.boardId=this.value; setO(); save.now() };
+          $("#pinTitle").oninput=function(){ p.options.pinterest.title=this.value; setO() };
+          $("#pinLink").oninput=function(){ p.options.pinterest.link=this.value.trim(); setO() };
+        }
+        if($("#tkPriv")){
+          var ta=acctFor("tiktok"), labels={PUBLIC_TO_EVERYONE:"Everyone",MUTUAL_FOLLOW_FRIENDS:"Friends (people who follow each other)",FOLLOWER_OF_CREATOR:"Followers",SELF_ONLY:"Only me"};
+          api("GET","social/accounts/"+ta._id+"/tiktok").then(function(d){ var s=$("#tkPriv"); if(!s) return; s.innerHTML='<option value="">Choose</option>'+d.info.privacy.map(function(x){ return '<option value="'+esc(x)+'"'+(p.options.tiktok.privacy_level===x?" selected":"")+'>'+esc(labels[x]||x)+'</option>' }).join("");
+            if(d.info.commentsOff){ var c=$("#tkCom"); c.checked=false; c.disabled=true } }).catch(function(e){ toast(e.message,true) });
+          $("#tkPriv").onchange=function(){ p.options.tiktok.privacy_level=this.value; setO(); save.now() };
+          $("#tkCom").onchange=function(){ p.options.tiktok.allow_comment=this.checked; setO(); save.now() };
+          if($("#tkDuet")) $("#tkDuet").onchange=function(){ p.options.tiktok.allow_duet=this.checked; setO(); save.now() };
+          if($("#tkStitch")) $("#tkStitch").onchange=function(){ p.options.tiktok.allow_stitch=this.checked; setO(); save.now() };
+          $("#tkBrand").onchange=function(){ p.options.tiktok.brand=this.checked; setO(); save.now(); extras() };
+          $("#tkOk").onchange=function(){ p.options.tiktok.consent=this.checked; setO(); save.now() };
+        }
+      }
+      $$("[data-pick]").forEach(function(b){ b.onclick=function(){
+        var pl=b.dataset.pick, on=b.getAttribute("aria-pressed")!=="true"; b.setAttribute("aria-pressed",String(on));
+        p.targets = on ? p.targets.concat([{platform:pl, accountId:acctFor(pl)._id}]) : p.targets.filter(function(t){return t.platform!==pl});
+        save({targets:p.targets}); save.now(); counts(); extras(); renderPreview();
+      } });
+      $("#spText").oninput=function(){ p.content=this.value; save({content:this.value}); counts(); renderPreview() };
+      $("#spFile").onchange=function(){
+        var files=Array.prototype.slice.call(this.files); this.value="";
+        files.reduce(function(chain,f){ return chain.then(function(){
+          if(f.size>100*1024*1024){ toast(f.name+" is over 100 MB. Make it smaller first.",true); return }
+          toast("Uploading "+f.name+"…");
+          return fetch("/api/social/media",{method:"POST",headers:{"content-type":f.type||"application/octet-stream","x-filename":encodeURIComponent(f.name)},body:f})
+            .then(function(res){ return res.json().then(function(d){ if(!res.ok) throw new Error(d.error||"Upload failed"); return d }) })
+            .then(function(d){ p.media.push(d.media); mediaList(); save({media:p.media}); save.now(); extras(); renderPreview(); toast(f.name+" added") })
+            .catch(function(e){ toast(e.message,true) });
+        }) }, Promise.resolve());
+      };
+      var confirmBox=function(text, label, fn){
+        $("#spSend").innerHTML='<div class="confirm"><span>'+text+'</span><button class="btn sm primary" type="button" id="cfYes">'+label+'</button><button class="btn sm ghost" type="button" id="cfNo">Not yet</button></div>';
+        $("#cfNo").onclick=function(){ $("#spSend").innerHTML="" };
+        $("#cfYes").onclick=function(){ this.disabled=true; fn() };
+      };
+      $("#spNow").onclick=function(){ save.now(); confirmBox("Post to "+esc(where())+" now?", "Post it", function(){
+        setTimeout(function(){ api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Posting"); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
+      $("#spSched").onclick=function(){ save.now(); var val=$("#spAt").value; if(!val){ toast("Pick a date and time first.",true); return }
+        var at=new Date(val).getTime(); confirmBox("Post to "+esc(where())+" on "+esc(fmtDate(at,true))+"?", "Schedule", function(){
+        setTimeout(function(){ api("POST","social/posts/"+pid+"/publish",{at:at}).then(function(){ toast("Scheduled"); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
+      mediaList(); counts(); extras(); showProblems(); renderPreview(); common();
+
+      function common(){}
+      function renderPreview(){
+        var host=$("#spPrev"); if(!host) return;
+        var text=(editable?$("#spText").value:p.content)||"";
+        var m=p.media, grid = m.length ? '<div class="pgrid n'+Math.min(m.length,4)+'">'+m.slice(0,4).map(function(x){ return x.type==="video"?'<video src="'+esc(x.url)+'" muted playsinline controls preload="metadata"></video>':'<img src="'+esc(x.url)+'" alt="">' }).join("")+'</div>' : '';
+        host.innerHTML='<div class="pcard"><div class="phead"><span class="pav">'+esc((brand.name||"?").slice(0,1))+'</span><span><b>'+esc(brand.name)+'</b><small>'+esc(where()||"Pick where it goes")+'</small></span></div>'+
+          (text?'<p class="ptext">'+esc(text)+'</p>':'')+grid+(m.length>4?'<p class="hint" style="margin:8px 14px">+'+(m.length-4)+' more</p>':'')+'</div>';
+      }
+    }).then(function(){
+      $("#spDup").onclick=function(){ api("POST","social/posts/"+pid+"/duplicate").then(function(r){ toast("Copy made"); go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
+      $("#spDel").onclick=function(){
+        $("#spConfirm").innerHTML='<div class="confirm"><span>Delete this post from Studio?'+(p.status==="published"||p.status==="partial"?' It stays up on the platforms; delete it there if you want it gone.':p.status==="scheduled"?' It won’t go out.':'')+'</span><button class="btn sm danger" type="button" id="sdY">Delete</button><button class="btn sm ghost" type="button" id="sdN">Keep it</button></div>';
+        $("#sdN").onclick=function(){ $("#spConfirm").innerHTML="" };
+        $("#sdY").onclick=function(){ api("DELETE","social/posts/"+pid).then(function(){ toast("Deleted"); go("#/social/b/"+p.profile_id) }).catch(function(e){ toast(e.message,true) }) };
+      };
+    });
+  });
+}
+
 /* ============ settings ============ */
 function settingsView(){
-  return Promise.all([api("GET","settings"), api("GET","settings/events")]).then(function(r){
-    var s=r[0].settings, ev=r[1], v=$("#view"), dbl=s.double_optin==="1";
+  return Promise.all([api("GET","settings"), api("GET","settings/events"), api("GET","social/status")]).then(function(r){
+    var s=r[0].settings, ev=r[1], zr=r[2], v=$("#view"), dbl=s.double_optin==="1";
     var evName={"email.bounced":"Bounced","email.complained":"Marked as spam","email.failed":"Couldn’t send","email.suppressed":"On do-not-send list"};
     var hooks = ev.connected
       ? '<div class="pad stack" style="gap:10px"><p style="margin:0"><span class="chip sent">Connected</span> Studio stops emailing addresses that bounce or mark you as spam, and takes them out of automations.</p>'+
@@ -821,7 +1029,11 @@ function settingsView(){
       '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
       '<div class="actions"><button type="button" class="switch" role="switch" id="sDbl" aria-checked="'+dbl+'" aria-labelledby="sDblLbl"></button><span id="sDblLbl">Ask new sign-ups to confirm their email</span></div>'+
       '<p class="hint">When this is on, people get a “tap to confirm” email first. Welcome emails and automations start once they tap it. Fewer typos and fake addresses on your lists, at the cost of some people never confirming.</p>'+
-      '</form><div class="stack"><section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
+      '</form><div class="stack"><section class="panel"><h2 class="sec">Social posting</h2><div class="pad stack" style="gap:12px">'+
+        (zr.connected && !zr.simulated
+          ? '<p style="margin:0"><span class="chip sent">Connected</span> Studio posts through Zernio. Connect accounts on the <a href="#/social">Social</a> page.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Replace the key</button><div id="zkHost" hidden></div>'
+          : '<p style="margin:0">Studio posts to Instagram, TikTok, LinkedIn and the rest through Zernio. First 2 accounts free, then $6 a month each.</p><div id="zkHost"></div>')+
+        '</div></section><section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
       '<section class="panel"><h2 class="sec">Connections</h2><div class="rows">'+
       '<div class="rowi" style="--pc:var(--'+(S.me.emailConnected?"moss":"brass")+')"><span class="t">Email sending<small>Resend, from @'+esc(S.me.root)+'</small></span><span class="meta"><span class="chip '+(S.me.emailConnected?"sent":"draft")+'">'+(S.me.emailConnected?(S.me.dev?"Simulated":"Connected"):"Not yet")+'</span></span></div>'+
       '<div class="rowi" style="--pc:var(--'+(ev.connected?"moss":"brass")+')"><span class="t">Delivery updates<small>Bounces and spam reports from Resend</small></span><span class="meta"><span class="chip '+(ev.connected?"sent":"draft")+'">'+(ev.connected?"Connected":"Not yet")+'</span></span></div>'+
@@ -849,6 +1061,15 @@ function settingsView(){
       api("POST","settings/connect-resend").then(function(){ toast("Connected"); route() })
         .catch(function(e){ b.disabled=false; b.textContent="Connect automatically"; manual($("#whManual"), e.message) }) };
     var rp=$("#whReplace"); if(rp) rp.onclick=function(){ this.hidden=true; manual($("#whManual")) };
+    function zkForm(host){
+      host.hidden=false;
+      host.innerHTML='<ol class="steps"><li>Sign up at <a href="https://zernio.com" target="_blank" rel="noopener">zernio.com</a> with '+esc(S.me.email)+'.</li><li>In Zernio, open <b>API keys</b> and create one called “Studio”.</li>'+
+        '<li>Paste it here (it starts with sk_):<div class="actions" style="margin-top:6px"><label class="sr" for="zkKey">Zernio API key</label><input type="password" id="zkKey" autocomplete="off" spellcheck="false" placeholder="sk_…" style="flex:1 1 220px;width:auto"><button class="btn primary" type="button" id="zkSave">Save</button></div></li></ol>';
+      $("#zkSave").onclick=function(){ var b=this, val=$("#zkKey").value.trim(); if(!val){ toast("Paste the key first.",true); return } b.disabled=true; b.textContent="Checking…";
+        api("PUT","settings/zernio-key",{key:val}).then(function(){ S.social=null; toast("Social posting connected"); route() }).catch(function(e){ b.disabled=false; b.textContent="Save"; toast(e.message,true) }) };
+    }
+    if(!(zr.connected && !zr.simulated)) zkForm($("#zkHost"));
+    var zk=$("#zkReplace"); if(zk) zk.onclick=function(){ this.hidden=true; zkForm($("#zkHost")) };
   });
 }
 

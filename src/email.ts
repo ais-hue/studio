@@ -1,5 +1,6 @@
 import { Env, accentOf, esc, getSettings, id, markdown, now, plainText } from "./util";
 import { runSequences } from "./automation";
+import { syncSocial } from "./social";
 
 interface SendRow {
   id: string; campaign_id: string | null; list_id: string | null; step_id: string | null; kind: string;
@@ -188,6 +189,7 @@ export async function runScheduled(env: Env): Promise<void> {
   for (const c of due) await enqueueCampaign(env, c);
   await runSequences(env, 300);
   await processQueue(env, 500);
+  await syncSocial(env).catch((e) => console.error("Social sync:", e));
 }
 
 /** Test one automation email. */

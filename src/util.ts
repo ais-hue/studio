@@ -7,6 +7,7 @@ export interface Env {
   DEV_AUTH: string;
   RESEND_API_KEY?: string;
   RESEND_WEBHOOK_SECRET?: string;
+  ZERNIO_API_KEY?: string;
   ADMIN_EMAILS: string;
 }
 
@@ -159,4 +160,4 @@ export async function getSettings(env: Env): Promise<Record<string, string>> {
 }
 
 /** Settings that are stored but never sent back to the browser. */
-export const PRIVATE_SETTINGS = new Set(["resend_webhook_secret", "resend_webhook_id"]);
+export const PRIVATE_SETTINGS = new Set(["resend_webhook_secret", "resend_webhook_id", "zernio_api_key"]);

@@ -36,6 +36,13 @@ async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     if (url.pathname.startsWith("/api/")) return json({ error: "You’ve been signed out. Sign in again to continue." }, 401);
     return Response.redirect(new URL("/login", req.url).toString(), 302);
   }
+  if (url.pathname === "/social/connected") {
+    // Zernio sends people back here after they log in to a platform; hand the result to the app.
+    const keep = new URLSearchParams();
+    for (const k of ["connected", "username", "error", "error_message", "platform"]) { const v = url.searchParams.get(k); if (v) keep.set(k, v.slice(0, 200)); }
+    const brand = url.searchParams.get("brand") || "";
+    return Response.redirect(new URL(`/#/social${brand ? "/b/" + encodeURIComponent(brand) : ""}?${keep}`, req.url).toString(), 302);
+  }
   if (url.pathname.startsWith("/api/")) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       // same-origin writes only
