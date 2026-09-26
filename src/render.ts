@@ -21,7 +21,7 @@ export interface RenderOpts {
   preview?: boolean;
   consentText: string;
   hasBlog: boolean;
-  joined?: boolean;
+  joined?: boolean | "confirm";
 }
 
 const fmtDate = (ms: number) =>
@@ -59,7 +59,7 @@ function signup(page: Page, c: Content, o: RenderOpts): string {
     <button type="submit">${esc(cta)}</button>
   </div>
   <label class="consent"><input type="checkbox" name="consent" value="yes" required> <span>${esc(o.consentText)}</span></label>
-  <div class="msg${o.joined ? " ok" : ""}" role="status" aria-live="polite">${o.joined ? "You’re on the list. Check your inbox." : ""}</div>
+  <div class="msg${o.joined ? " ok" : ""}" role="status" aria-live="polite">${o.joined === "confirm" ? "Almost there. Check your inbox and tap the link to confirm." : o.joined ? "You’re on the list. Check your inbox." : ""}</div>
 </form>`;
 }
 

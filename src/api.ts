@@ -1,7 +1,9 @@
-import { ACCENTS, Env, HttpError, RESERVED_SUBDOMAINS, getSettings, id, isEmail, json, now, slugify } from "./util";
+import { ACCENTS, Env, HttpError, PRIVATE_SETTINGS, RESERVED_SUBDOMAINS, getSettings, id, isEmail, json, now, slugify } from "./util";
 import { Content, Page, Site, renderPage } from "./render";
 import { defaultWelcome, siteList, upsertContact } from "./public";
-import { Campaign, enqueueCampaign, processQueue, renderEmail, sendTest } from "./email";
+import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sendTest } from "./email";
+import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
+import { connectResendWebhook, webhookStatus } from "./hooks";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -76,7 +78,8 @@ async function campaignStats(env: Env, cid: string) {
       SUM(status = 'sent') AS sent, SUM(status = 'queued') AS queued,
       SUM(status = 'failed') AS failed, SUM(status = 'skipped') AS skipped,
       SUM(opened_at IS NOT NULL) AS opened, SUM(clicked_at IS NOT NULL) AS clicked,
-      MAX(error) AS last_error
+      SUM(delivered_at IS NOT NULL) AS delivered, SUM(bounced_at IS NOT NULL) AS bounced, SUM(complained_at IS NOT NULL) AS complained,
+      MAX(CASE WHEN status = 'failed' THEN error END) AS last_error
     FROM sends WHERE campaign_id = ? AND kind = 'campaign'`).bind(cid).first();
 }
 
@@ -259,18 +262,23 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b && m === "GET") {
       const ct = await env.DB.prepare("SELECT * FROM contacts WHERE id = ?").bind(b).first();
       if (!ct) throw new HttpError(404, "That contact doesn’t exist any more.");
-      const [lists, sends] = await env.DB.batch([
+      const [lists, sends, enrolled] = await env.DB.batch([
         env.DB.prepare("SELECT list_id FROM list_members WHERE contact_id = ?").bind(b),
-        env.DB.prepare(`SELECT s.kind, s.status, s.sent_at, s.opened_at, s.clicked_at, s.created_at, cp.name AS campaign FROM sends s LEFT JOIN campaigns cp ON cp.id = s.campaign_id WHERE s.contact_id = ? ORDER BY s.created_at DESC LIMIT 20`).bind(b),
+        env.DB.prepare(`SELECT s.kind, s.status, s.error, s.sent_at, s.opened_at, s.clicked_at, s.bounced_at, s.complained_at, s.created_at, cp.name AS campaign, st.subject AS step_subject, q.name AS sequence
+          FROM sends s LEFT JOIN campaigns cp ON cp.id = s.campaign_id LEFT JOIN sequence_steps st ON st.id = s.step_id LEFT JOIN sequences q ON q.id = st.sequence_id
+          WHERE s.contact_id = ? ORDER BY s.created_at DESC LIMIT 30`).bind(b),
+        env.DB.prepare(`SELECT e.id, e.sequence_id, e.status, e.exit_reason, e.step_index, e.next_at, e.created_at, q.name, (SELECT COUNT(*) FROM sequence_steps x WHERE x.sequence_id = q.id) AS steps
+          FROM enrollments e JOIN sequences q ON q.id = e.sequence_id WHERE e.contact_id = ? ORDER BY e.created_at DESC`).bind(b),
       ]);
-      return json({ contact: ct, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results });
+      return json({ contact: ct, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results, enrollments: enrolled.results });
     }
     if (b && m === "PATCH") {
       const d = await body(req);
       const ct = await env.DB.prepare("SELECT * FROM contacts WHERE id = ?").bind(b).first<any>();
       if (!ct) throw new HttpError(404, "That contact doesn’t exist any more.");
-      const status = ["subscribed", "unsubscribed", "bounced"].includes(d.status) ? d.status : ct.status;
+      const status = ["subscribed", "unsubscribed", "bounced", "complained", "pending"].includes(d.status) ? d.status : ct.status;
       await env.DB.prepare("UPDATE contacts SET name = ?, status = ?, updated_at = ? WHERE id = ?").bind(d.name !== undefined ? str(d.name, 80) : ct.name, status, t, b).run();
+      if (status !== "subscribed" && ct.status === "subscribed") await exitAll(env, b, status);
       if (Array.isArray(d.lists)) {
         const stmts = [env.DB.prepare("DELETE FROM list_members WHERE contact_id = ?").bind(b)];
         for (const l of d.lists) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO list_members (list_id, contact_id, added_at) VALUES (?, ?, ?)").bind(String(l), b, t));
@@ -282,6 +290,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       await env.DB.batch([
         env.DB.prepare("DELETE FROM list_members WHERE contact_id = ?").bind(b),
         env.DB.prepare("DELETE FROM sends WHERE contact_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM enrollments WHERE contact_id = ?").bind(b),
         env.DB.prepare("DELETE FROM contacts WHERE id = ?").bind(b),
       ]);
       return json({ ok: true });
@@ -317,7 +326,11 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       return json({ ok: true });
     }
     if (b && m === "DELETE") {
-      await env.DB.batch([env.DB.prepare("DELETE FROM list_members WHERE list_id = ?").bind(b), env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(b)]);
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM list_members WHERE list_id = ?").bind(b),
+        env.DB.prepare("UPDATE sequences SET trigger_list_id = NULL, status = CASE WHEN status = 'active' THEN 'paused' ELSE status END, updated_at = ? WHERE trigger_list_id = ?").bind(t, b),
+        env.DB.prepare("DELETE FROM lists WHERE id = ?").bind(b),
+      ]);
       return json({ ok: true });
     }
   }
@@ -413,19 +426,197 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     return new Response(r.html, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
+
+  /* ---------- automations ---------- */
+  if (a === "sequences") {
+    if (!b && m === "GET") {
+      const { results } = await env.DB.prepare(`SELECT q.*, l.name AS list_name, cp.name AS campaign_name,
+        (SELECT COUNT(*) FROM sequence_steps x WHERE x.sequence_id = q.id) AS steps,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.sequence_id = q.id AND e.status = 'active') AS active,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.sequence_id = q.id AND e.status = 'completed') AS completed,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.sequence_id = q.id) AS total,
+        (SELECT COUNT(*) FROM sends s JOIN sequence_steps x ON x.id = s.step_id WHERE x.sequence_id = q.id AND s.status = 'sent') AS sent
+        FROM sequences q LEFT JOIN lists l ON l.id = q.trigger_list_id LEFT JOIN campaigns cp ON cp.id = q.trigger_campaign_id
+        ORDER BY q.status = 'active' DESC, q.updated_at DESC`).all();
+      return json({ sequences: results });
+    }
+    if (!b && m === "POST") {
+      const d = await body(req);
+      const sid = id("sq_");
+      const listId = d.trigger_list_id ? str(d.trigger_list_id) : null;
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO sequences (id, name, trigger, trigger_list_id, site_id, created_at, updated_at) VALUES (?, ?, 'list', ?, ?, ?, ?)")
+          .bind(sid, str(d.name, 80) || "Untitled automation", listId, d.site_id || null, t, t),
+        env.DB.prepare("INSERT INTO sequence_steps (id, sequence_id, position, delay_minutes, subject, body, created_at, updated_at) VALUES (?, ?, 0, 0, ?, ?, ?, ?)")
+          .bind(id("sp_"), sid, "Welcome", "Hi {{name}},\n\nThanks for signing up. Here’s what happens next.\n\nAisling", t, t),
+      ]);
+      return json({ id: sid }, 201);
+    }
+    if (b) {
+      const q = await env.DB.prepare("SELECT * FROM sequences WHERE id = ?").bind(b).first<Sequence>();
+      if (!q) throw new HttpError(404, "That automation doesn’t exist any more.");
+      if (!c && m === "GET") {
+        const [steps, counts, people] = await env.DB.batch([
+          env.DB.prepare(`SELECT st.*,
+            (SELECT COUNT(*) FROM sends s WHERE s.step_id = st.id AND s.status = 'sent') AS sent,
+            (SELECT COUNT(*) FROM sends s WHERE s.step_id = st.id AND s.opened_at IS NOT NULL) AS opened,
+            (SELECT COUNT(*) FROM sends s WHERE s.step_id = st.id AND s.clicked_at IS NOT NULL) AS clicked,
+            (SELECT COUNT(*) FROM sends s WHERE s.step_id = st.id AND s.status = 'queued') AS queued
+            FROM sequence_steps st WHERE st.sequence_id = ? ORDER BY st.position`).bind(b),
+          env.DB.prepare(`SELECT SUM(status = 'active') AS active, SUM(status = 'completed') AS completed, SUM(status = 'exited') AS exited, COUNT(*) AS total FROM enrollments WHERE sequence_id = ?`).bind(b),
+          env.DB.prepare(`SELECT e.id, e.status, e.exit_reason, e.step_index, e.next_at, e.created_at, c.id AS contact_id, c.email, c.name
+            FROM enrollments e JOIN contacts c ON c.id = e.contact_id WHERE e.sequence_id = ? ORDER BY e.created_at DESC LIMIT 25`).bind(b),
+        ]);
+        return json({ sequence: q, steps: steps.results, counts: counts.results[0], people: people.results });
+      }
+      if (!c && m === "PATCH") {
+        const d = await body(req);
+        const next = {
+          name: d.name !== undefined ? str(d.name, 80) || q.name : q.name,
+          trigger: ["list", "click", "manual"].includes(d.trigger) ? d.trigger : q.trigger,
+          trigger_list_id: d.trigger_list_id !== undefined ? d.trigger_list_id || null : q.trigger_list_id,
+          trigger_campaign_id: d.trigger_campaign_id !== undefined ? d.trigger_campaign_id || null : q.trigger_campaign_id,
+          site_id: d.site_id !== undefined ? d.site_id || null : q.site_id,
+          status: ["draft", "active", "paused"].includes(d.status) ? d.status : q.status,
+        };
+        if (next.status === "active" && q.status !== "active") {
+          if (next.trigger === "list" && !(next.trigger_list_id && await env.DB.prepare("SELECT 1 FROM lists WHERE id = ?").bind(next.trigger_list_id).first()))
+            throw new HttpError(400, "Pick the list that starts this automation first.");
+          if (next.trigger === "click" && !(next.trigger_campaign_id && await env.DB.prepare("SELECT 1 FROM campaigns WHERE id = ?").bind(next.trigger_campaign_id).first()))
+            throw new HttpError(400, "Pick the email whose links start this automation first.");
+          const steps = (await env.DB.prepare("SELECT position, subject, body FROM sequence_steps WHERE sequence_id = ? ORDER BY position").bind(b).all<Step>()).results;
+          if (!steps.length) throw new HttpError(400, "Add at least one email first.");
+          const bad = steps.findIndex((s) => !s.subject.trim() || !s.body.trim());
+          if (bad > -1) throw new HttpError(400, `Email ${bad + 1} needs a subject and a message before this can go live.`);
+          if (!env.RESEND_API_KEY && env.DEV_AUTH !== "1") throw new HttpError(409, "Email sending isn’t connected yet.");
+        }
+        await env.DB.prepare("UPDATE sequences SET name = ?, trigger = ?, trigger_list_id = ?, trigger_campaign_id = ?, site_id = ?, status = ?, updated_at = ? WHERE id = ?")
+          .bind(next.name, next.trigger, next.trigger_list_id, next.trigger_campaign_id, next.site_id, next.status, t, b).run();
+        return json({ sequence: await env.DB.prepare("SELECT * FROM sequences WHERE id = ?").bind(b).first() });
+      }
+      if (!c && m === "DELETE") {
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM enrollments WHERE sequence_id = ?").bind(b),
+          env.DB.prepare("DELETE FROM sends WHERE status = 'queued' AND step_id IN (SELECT id FROM sequence_steps WHERE sequence_id = ?)").bind(b),
+          env.DB.prepare("DELETE FROM sequence_steps WHERE sequence_id = ?").bind(b),
+          env.DB.prepare("DELETE FROM sequences WHERE id = ?").bind(b),
+        ]);
+        return json({ ok: true });
+      }
+      if (c === "steps" && m === "POST") {
+        const last = await env.DB.prepare("SELECT MAX(position) AS p FROM sequence_steps WHERE sequence_id = ?").bind(b).first<{ p: number | null }>();
+        const pos = last?.p == null ? 0 : last.p + 1;
+        await env.DB.prepare("INSERT INTO sequence_steps (id, sequence_id, position, delay_minutes, subject, body, created_at, updated_at) VALUES (?, ?, ?, ?, '', ?, ?, ?)")
+          .bind(id("sp_"), b, pos, pos === 0 ? 0 : 2 * 1440, "Hi {{name}},\n\n\n\nAisling", t, t).run();
+        return json({ ok: true }, 201);
+      }
+      if (c === "enroll-list" && m === "POST") {
+        if (q.status !== "active") throw new HttpError(409, "Switch the automation on first.");
+        if (q.trigger !== "list" || !q.trigger_list_id) throw new HttpError(400, "This automation doesn’t start from a list.");
+        return json({ added: await enrollList(env, b, q.trigger_list_id) });
+      }
+      if (c === "enroll" && m === "POST") {
+        if (q.status !== "active") throw new HttpError(409, "Switch the automation on first.");
+        const d = await body(req);
+        const ct = await env.DB.prepare("SELECT id, status FROM contacts WHERE id = ?").bind(str(d.contact_id)).first<{ id: string; status: string }>();
+        if (!ct) throw new HttpError(404, "That contact doesn’t exist any more.");
+        if (ct.status !== "subscribed") throw new HttpError(400, "Only subscribed contacts can be added.");
+        if (!(await enroll(env, b, ct.id))) throw new HttpError(409, "They’ve already been through this automation.");
+        return json({ ok: true });
+      }
+    }
+  }
+
+  if (a === "steps" && b) {
+    const st = await env.DB.prepare("SELECT * FROM sequence_steps WHERE id = ?").bind(b).first<Step>();
+    if (!st) throw new HttpError(404, "That email doesn’t exist any more.");
+    const touch = env.DB.prepare("UPDATE sequences SET updated_at = ? WHERE id = ?").bind(t, st.sequence_id);
+    if (!c && m === "PATCH") {
+      const d = await body(req);
+      const f = (k: string, max: number) => (d[k] !== undefined ? str(d[k], max) : (st as any)[k]);
+      const delay = d.delay_minutes !== undefined ? Math.max(0, Math.min(365 * 1440, Math.round(Number(d.delay_minutes) || 0))) : st.delay_minutes;
+      const cond = CONDITIONS.includes(d.condition) ? d.condition : st.condition;
+      await env.DB.batch([
+        env.DB.prepare("UPDATE sequence_steps SET subject = ?, preheader = ?, body = ?, delay_minutes = ?, condition = ?, updated_at = ? WHERE id = ?")
+          .bind(f("subject", 150), f("preheader", 200), f("body", 50000), delay, cond, t, b),
+        touch,
+      ]);
+      return json({ step: await env.DB.prepare("SELECT * FROM sequence_steps WHERE id = ?").bind(b).first() });
+    }
+    if (!c && m === "DELETE") {
+      const idx = (await env.DB.prepare("SELECT COUNT(*) AS n FROM sequence_steps WHERE sequence_id = ? AND position < ?").bind(st.sequence_id, st.position).first<{ n: number }>())?.n || 0;
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM sends WHERE step_id = ? AND status = 'queued'").bind(b),
+        env.DB.prepare("DELETE FROM sequence_steps WHERE id = ?").bind(b),
+        // People waiting further along keep their place.
+        env.DB.prepare("UPDATE enrollments SET step_index = step_index - 1 WHERE sequence_id = ? AND status = 'active' AND step_index > ?").bind(st.sequence_id, idx),
+        touch,
+      ]);
+      return json({ ok: true });
+    }
+    if (c === "move" && m === "POST") {
+      const d = await body(req);
+      const other = await env.DB.prepare(`SELECT id, position FROM sequence_steps WHERE sequence_id = ? AND position ${d.dir < 0 ? "<" : ">"} ? ORDER BY position ${d.dir < 0 ? "DESC" : "ASC"} LIMIT 1`)
+        .bind(st.sequence_id, st.position).first<{ id: string; position: number }>();
+      if (other) await env.DB.batch([
+        env.DB.prepare("UPDATE sequence_steps SET position = ? WHERE id = ?").bind(other.position, st.id),
+        env.DB.prepare("UPDATE sequence_steps SET position = ? WHERE id = ?").bind(st.position, other.id),
+        touch,
+      ]);
+      return json({ ok: true });
+    }
+    if (c === "test" && m === "POST") {
+      const d = await body(req);
+      const to = str(d.to, 254).toLowerCase();
+      if (!isEmail(to)) throw new HttpError(400, "Enter an email address to send the test to.");
+      if (!st.subject.trim()) throw new HttpError(400, "Add a subject line first.");
+      const q = await env.DB.prepare("SELECT site_id FROM sequences WHERE id = ?").bind(st.sequence_id).first<{ site_id: string | null }>();
+      const r = await sendStepTest(env, st, q?.site_id || null, to);
+      if (!r.ok) throw new HttpError(502, r.error || "The test didn’t send.");
+      return json({ ok: true });
+    }
+  }
+
+  if (a === "enrollments" && b && c === "exit" && m === "POST") {
+    await env.DB.prepare("UPDATE enrollments SET status = 'exited', exit_reason = 'removed', next_at = NULL, updated_at = ? WHERE id = ? AND status = 'active'").bind(t, b).run();
+    return json({ ok: true });
+  }
+
   /* ---------- settings ---------- */
   if (a === "settings") {
-    if (m === "GET") return json({ settings: await getSettings(env) });
-    if (m === "PUT") {
+    const visible = async () => {
+      const all = await getSettings(env);
+      for (const k of PRIVATE_SETTINGS) delete all[k];
+      return all;
+    };
+    if (b === "events" && m === "GET") {
+      const { results } = await env.DB.prepare("SELECT type, email, detail, created_at FROM email_events WHERE type != 'email.delivered' ORDER BY created_at DESC LIMIT 12").all();
+      return json({ ...(await webhookStatus(env)), endpoint: `https://go.${env.ROOT_DOMAIN}/hooks/resend`, recent: results });
+    }
+    if (b === "connect-resend" && m === "POST") {
+      const r = await connectResendWebhook(env);
+      if (!r.ok) return json({ error: r.error, needsManual: r.needsManual }, 409);
+      return json({ ok: true });
+    }
+    if (b === "webhook-secret" && m === "PUT") {
       const d = await body(req);
-      const allowed = ["sender_name", "sender_email", "reply_to", "postal_address", "consent_text"];
+      const secret = str(d.secret, 200);
+      if (secret && !/^whsec_[A-Za-z0-9+/=]{16,}$/.test(secret)) throw new HttpError(400, "That doesn’t look like a signing secret. It starts with whsec_.");
+      await env.DB.prepare(secret ? "INSERT INTO settings (key, value) VALUES ('resend_webhook_secret', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value" : "DELETE FROM settings WHERE key = 'resend_webhook_secret' AND ? = ''").bind(secret).run();
+      return json({ ok: true });
+    }
+    if (!b && m === "GET") return json({ settings: await visible() });
+    if (!b && m === "PUT") {
+      const d = await body(req);
+      const allowed = ["sender_name", "sender_email", "reply_to", "postal_address", "consent_text", "double_optin"];
+      if (d.double_optin !== undefined) d.double_optin = d.double_optin === true || d.double_optin === "1" ? "1" : "0";
       if (d.sender_email !== undefined && !isEmail(str(d.sender_email))) throw new HttpError(400, "The sender address doesn’t look right.");
       if (d.sender_email !== undefined && !str(d.sender_email).toLowerCase().endsWith("@" + env.ROOT_DOMAIN)) throw new HttpError(400, `The sender address has to end in @${env.ROOT_DOMAIN}.`);
       if (d.reply_to && !isEmail(str(d.reply_to))) throw new HttpError(400, "The reply-to address doesn’t look right.");
       const stmts = allowed.filter((k) => d[k] !== undefined).map((k) =>
         env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(k, str(d[k], 500)));
       if (stmts.length) await env.DB.batch(stmts);
-      return json({ settings: await getSettings(env) });
+      return json({ settings: await visible() });
     }
   }
 

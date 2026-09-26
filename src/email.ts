@@ -1,7 +1,8 @@
 import { Env, accentOf, esc, getSettings, id, markdown, now, plainText } from "./util";
+import { runSequences } from "./automation";
 
 interface SendRow {
-  id: string; campaign_id: string | null; list_id: string | null; kind: string;
+  id: string; campaign_id: string | null; list_id: string | null; step_id: string | null; kind: string;
   contact_id: string | null; email: string; name: string | null; token: string | null; cstatus: string | null;
 }
 interface Campaign {
@@ -121,12 +122,13 @@ export async function enqueueCampaign(env: Env, c: Campaign): Promise<number> {
 }
 
 export async function processQueue(env: Env, max = 300): Promise<number> {
-  const { results } = await env.DB.prepare(`SELECT s.id, s.campaign_id, s.list_id, s.kind, s.contact_id, s.email, c.name, c.token, c.status AS cstatus
+  const { results } = await env.DB.prepare(`SELECT s.id, s.campaign_id, s.list_id, s.step_id, s.kind, s.contact_id, s.email, c.name, c.token, c.status AS cstatus
     FROM sends s LEFT JOIN contacts c ON c.id = s.contact_id WHERE s.status = 'queued' ORDER BY s.created_at LIMIT ?`).bind(max).all<SendRow>();
   if (!results.length) return 0;
   const settings = await getSettings(env);
   const campaigns = new Map<string, (Campaign & { accent?: string; siteName?: string }) | null>();
   const lists = new Map<string, { welcome_subject: string; welcome_body: string; accent?: string; siteName?: string } | null>();
+  const steps = new Map<string, { subject: string; preheader: string; body: string; accent?: string; siteName?: string } | null>();
   const skip: string[] = [];
   const out: Array<{ row: SendRow; msg: Record<string, unknown> }> = [];
 
@@ -149,6 +151,15 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
       if (!l) { skip.push(row.id); continue; }
       r = renderEmail(env, settings, { subject: l.welcome_subject, body: l.welcome_body, accent: l.accent, siteName: l.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "" });
       out.push({ row, msg: { from: fromLine(settings, l.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
+    } else if (row.kind === "sequence" && row.step_id) {
+      if (!steps.has(row.step_id)) {
+        steps.set(row.step_id, await env.DB.prepare(`SELECT st.subject, st.preheader, st.body, s.accent, s.name AS siteName FROM sequence_steps st
+          JOIN sequences q ON q.id = st.sequence_id LEFT JOIN sites s ON s.id = q.site_id WHERE st.id = ?`).bind(row.step_id).first());
+      }
+      const st = steps.get(row.step_id);
+      if (!st || !st.subject.trim()) { skip.push(row.id); continue; }
+      r = renderEmail(env, settings, { subject: st.subject, preheader: st.preheader, body: st.body, accent: st.accent, siteName: st.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "" });
+      out.push({ row, msg: { from: fromLine(settings, st.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
     } else skip.push(row.id);
   }
 
@@ -175,7 +186,28 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
 export async function runScheduled(env: Env): Promise<void> {
   const due = (await env.DB.prepare("SELECT * FROM campaigns WHERE status = 'scheduled' AND scheduled_at <= ?").bind(now()).all<Campaign>()).results;
   for (const c of due) await enqueueCampaign(env, c);
+  await runSequences(env, 300);
   await processQueue(env, 500);
+}
+
+/** Test one automation email. */
+export async function sendStepTest(env: Env, step: { subject: string; preheader: string; body: string }, siteId: string | null, to: string): Promise<{ ok: boolean; error?: string }> {
+  return sendTest(env, { id: "", name: "", subject: step.subject, preheader: step.preheader, body: step.body, list_id: null, site_id: siteId, status: "draft" }, to);
+}
+
+/** Double opt-in: ask a new signup to confirm before anything else is sent. */
+export async function sendConfirmation(env: Env, c: { email: string; name: string; token: string }, site: { name: string; accent: string } | null): Promise<{ ok: boolean; error?: string }> {
+  const settings = await getSettings(env);
+  const link = `https://go.${env.ROOT_DOMAIN}/confirm/${c.token}`;
+  const what = site ? `**${site.name}**` : "my emails";
+  const r = renderEmail(env, settings, {
+    subject: site ? `Confirm your email for ${site.name}` : "Confirm your email",
+    preheader: "One tap and you’re in.",
+    body: `Hi {{name}},\n\nYou (or someone using this address) signed up for ${what}. Tap below to confirm it’s you.\n\n[Yes, sign me up](${link})\n\nIf this wasn’t you, ignore this email and you won’t hear from us again.`,
+    accent: site?.accent, siteName: site?.name, email: c.email, name: c.name, token: c.token,
+  });
+  const [res] = await resendBatch(env, [{ from: fromLine(settings, site?.name), to: [c.email], subject: r.subject, html: r.html, text: r.text, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) }]);
+  return res;
 }
 
 export type { Campaign };

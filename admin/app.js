@@ -63,12 +63,14 @@ $("#themeBtn").addEventListener("click", function(){ applyTheme(currentTheme()==
 
 /* ============ sidebar ============ */
 function refreshNav(){
-  return Promise.all([api("GET","sites"), api("GET","overview"), api("GET","campaigns")]).then(function(r){
+  return Promise.all([api("GET","sites"), api("GET","overview"), api("GET","campaigns"), api("GET","sequences")]).then(function(r){
     S.sites=r[0].sites;
     $("#navSites").innerHTML=r[0].sites.map(function(s){ return '<a class="site" href="#/sites/'+esc(s.id)+'" data-site="'+esc(s.id)+'" style="--sw:var(--s-'+esc(s.accent)+')"><i></i><span>'+esc(s.name)+'</span></a>' }).join("");
     $("#navContacts").textContent = r[1].counts.subscribed || "";
     var drafts=r[2].campaigns.filter(function(c){return c.status==="draft"}).length;
     $("#navEmails").textContent = drafts ? drafts+" draft"+(drafts===1?"":"s") : "";
+    var onCount=r[3].sequences.filter(function(q){return q.status==="active"}).length;
+    $("#navAuto").textContent = onCount ? onCount+" on" : "";
     markNav();
   }).catch(function(){});
 }
@@ -93,6 +95,8 @@ function route(){
   else if(top==="contacts") p=contactsView(parts[1]);
   else if(top==="emails" && parts[1]) p=emailView(parts[1]);
   else if(top==="emails") p=emailsView();
+  else if(top==="automations" && parts[1]) p=automationView(parts[1], parts[2]);
+  else if(top==="automations") p=automationsView();
   else if(top==="settings") p=settingsView();
   else p=Promise.resolve(v.innerHTML='<div class="empty"><b>Page not found</b><a href="#/">Go to the overview</a></div>');
   Promise.resolve(p).catch(function(e){ v.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p><button class="btn sm" type="button" onclick="location.reload()">Reload</button></div>' });
@@ -412,7 +416,7 @@ function contactsView(listParam){
         lists.map(function(l){ return '<button type="button" data-list="'+esc(l.id)+'" aria-pressed="'+(st.list===l.id)+'"><span>'+esc(l.name)+'</span><span class="num">'+l.subscribed+'</span></button>' }).join("")+'</div>'+
         (cur ? '<div class="stack" style="margin-top:6px">'+(cur.site_id ? '<p class="hint">Signups from '+esc(cur.site_name)+' land here. <a href="#/sites/'+esc(cur.site_id)+'/welcome">Welcome email</a></p>' : '<div class="actions"><button type="button" class="btn sm" id="renameList">Rename</button><button type="button" class="btn sm danger" id="deleteList">Delete list</button></div><div id="listConfirm"></div>')+'</div>' : '')+
       '</aside><section class="stack"><div id="panel"></div><div class="filters"><label class="sr" for="cq">Search</label><input type="search" id="cq" placeholder="Search name or email" value="'+esc(st.q)+'">'+
-        '<label class="sr" for="cs">Status</label><select id="cs"><option value="">Any status</option><option value="subscribed"'+(st.status==="subscribed"?" selected":"")+'>Subscribed</option><option value="unsubscribed"'+(st.status==="unsubscribed"?" selected":"")+'>Unsubscribed</option><option value="bounced"'+(st.status==="bounced"?" selected":"")+'>Bounced</option></select>'+
+        '<label class="sr" for="cs">Status</label><select id="cs"><option value="">Any status</option><option value="subscribed"'+(st.status==="subscribed"?" selected":"")+'>Subscribed</option><option value="unsubscribed"'+(st.status==="unsubscribed"?" selected":"")+'>Unsubscribed</option><option value="pending"'+(st.status==="pending"?" selected":"")+'>Waiting to confirm</option><option value="bounced"'+(st.status==="bounced"?" selected":"")+'>Bounced</option><option value="complained"'+(st.status==="complained"?" selected":"")+'>Marked as spam</option></select>'+
         '<span class="label" id="count"></span></div><div id="tableHost"></div></section></div>';
     $$("[data-list]").forEach(function(b){ b.onclick=function(){ st.list=b.dataset.list; st.offset=0; st.open=null; st.panel=null; history.replaceState(null,"","#/contacts"+(st.list?"/"+st.list:"")); renderShell(); load() } });
     var qt; $("#cq").oninput=function(){ var val=this.value; clearTimeout(qt); qt=setTimeout(function(){ st.q=val; st.offset=0; load() },250) };
@@ -481,14 +485,27 @@ function contactsView(listParam){
     }
     else if(st.panel==="detail" && st.open){
       p.innerHTML='<div class="drawer"><div class="loading">Loading…</div></div>';
-      api("GET","contacts/"+st.open).then(function(d){
-        var c=d.contact;
+      Promise.all([api("GET","contacts/"+st.open), api("GET","sequences")]).then(function(rr){
+        var d=rr[0], c=d.contact, inIds=d.enrollments.map(function(e){return e.sequence_id});
+        var autos=rr[1].sequences.filter(function(q){ return q.status==="active" && inIds.indexOf(q.id)<0 });
         p.innerHTML='<form class="drawer" id="cdForm"><h2 class="sec">'+esc(c.email)+' <span class="saving" id="cdSave">Saved</span></h2>'+
           '<div class="fieldrow"><div class="field"><label for="cdName">Name</label><input type="text" id="cdName" maxlength="80" value="'+esc(c.name)+'"></div>'+
-          '<div class="field"><label for="cdStatus">Status</label><select id="cdStatus">'+["subscribed","unsubscribed","bounced"].map(function(s){ return '<option value="'+s+'"'+(c.status===s?" selected":"")+'>'+s[0].toUpperCase()+s.slice(1)+'</option>' }).join("")+'</select></div></div>'+
+          '<div class="field"><label for="cdStatus">Status</label><select id="cdStatus">'+[["subscribed","Subscribed"],["unsubscribed","Unsubscribed"],["pending","Waiting to confirm"],["bounced","Bounced"],["complained","Marked as spam"]].map(function(s){ return '<option value="'+s[0]+'"'+(c.status===s[0]?" selected":"")+'>'+s[1]+'</option>' }).join("")+'</select></div></div>'+
           listChecks(d.lists)+
           '<p class="hint">Came from '+esc(c.source||"—")+' on '+fmtDate(c.created_at,true)+'. '+(c.consent_at ? 'Agreed to emails on '+fmtDate(c.consent_at,true)+': “'+esc(c.consent_text)+'”' : 'Added by hand or import, no signup consent recorded.')+'</p>'+
-          (d.sends.length ? '<div class="tablewrap"><table><thead><tr><th>Email</th><th>Status</th><th class="r">Opened</th><th class="r">Clicked</th></tr></thead><tbody>'+d.sends.map(function(s){ return '<tr><td>'+esc(s.campaign || (s.kind==="welcome"?"Welcome email":s.kind))+'<span class="sub">'+fmtDate(s.sent_at||s.created_at,true)+'</span></td><td><span class="chip '+esc(s.status)+'">'+esc(s.status)+'</span></td><td class="r mono">'+(s.opened_at?"Yes":"—")+'</td><td class="r mono">'+(s.clicked_at?"Yes":"—")+'</td></tr>' }).join("")+'</tbody></table></div>' : '<p class="hint">No emails sent to them yet.</p>')+
+          (c.status==="bounced" ? '<div class="notice danger"><p>Emails to this address bounced, so Studio stopped sending to it. Only switch it back if you know the address works now.</p></div>' : '')+
+          (c.status==="complained" ? '<div class="notice danger"><p>They marked one of your emails as spam, so Studio stopped emailing them. Leave this as it is unless they ask to hear from you again.</p></div>' : '')+
+          (c.status==="pending" ? '<div class="notice"><p>They signed up but haven’t tapped the confirmation link yet. Nothing else is sent until they do.</p></div>' : '')+
+          '<h2 class="sec">Automations</h2>'+
+          (d.enrollments.length ? '<div class="tablewrap"><table><tbody>'+d.enrollments.map(function(e){
+              var where = e.status==="active" ? "Email "+(e.step_index+1)+" of "+e.steps+" due "+(e.next_at?fmtDate(e.next_at,true):"soon") : e.status==="completed" ? "Got every email" : "Left early: "+(e.exit_reason||"");
+              return '<tr><td><a href="#/automations/'+esc(e.sequence_id)+'">'+esc(e.name)+'</a><span class="sub">'+esc(where)+'</span></td><td class="r">'+(e.status==="active"?'<button class="btn sm ghost" type="button" data-exit="'+esc(e.id)+'">Take out</button>':'<span class="chip '+esc(e.status)+'">'+esc(e.status)+'</span>')+'</td></tr>' }).join("")+'</tbody></table></div>' : '<p class="hint">Not in any automations.</p>')+
+          (c.status==="subscribed" && autos.length ? '<div class="actions"><label class="sr" for="cdAuto">Automation</label><select id="cdAuto" style="flex:1 1 200px;width:auto"><option value="">Add to an automation…</option>'+autos.map(function(q){ return '<option value="'+esc(q.id)+'">'+esc(q.name)+'</option>' }).join("")+'</select><button class="btn sm" type="button" id="cdAutoGo">Add</button></div>' : '')+
+          '<h2 class="sec">Emails</h2>'+
+          (d.sends.length ? '<div class="tablewrap"><table><thead><tr><th>Email</th><th>Status</th><th class="r">Opened</th><th class="r">Clicked</th></tr></thead><tbody>'+d.sends.map(function(s){
+              var label = s.campaign || (s.kind==="welcome"?"Welcome email": s.kind==="confirm"?"Confirm your email": s.kind==="sequence"?(s.sequence||"Automation")+": "+(s.step_subject||"email"): s.kind);
+              var stt = s.complained_at ? "complained" : s.bounced_at ? "bounced" : s.status;
+              return '<tr><td>'+esc(label)+'<span class="sub">'+fmtDate(s.sent_at||s.created_at,true)+(s.error&&stt!=="sent"?' · '+esc(s.error):'')+'</span></td><td><span class="chip '+esc(stt)+'">'+esc(stt==="complained"?"spam report":stt)+'</span></td><td class="r mono">'+(s.opened_at?"Yes":"—")+'</td><td class="r mono">'+(s.clicked_at?"Yes":"—")+'</td></tr>' }).join("")+'</tbody></table></div>' : '<p class="hint">No emails sent to them yet.</p>')+
           '<div class="actions"><button class="btn" type="button" data-close>Close</button><button class="btn sm danger" type="button" id="cdDel">Delete contact</button></div><div id="cdConfirm"></div></form>';
         var save=saver($("#cdSave"), function(x){ return api("PATCH","contacts/"+c.id,x).then(function(){ var row=st.rows.filter(function(r){return r.id===c.id})[0]; if(row){ if(x.name!==undefined) row.name=x.name; if(x.status) row.status=x.status; if(x.lists) row.list_ids=x.lists.join(",") } renderTable() }) });
         $("#cdName").oninput=function(){ save({name:this.value}) };
@@ -498,6 +515,9 @@ function contactsView(listParam){
           $("#cdConfirm").innerHTML='<div class="confirm"><span>Delete '+esc(c.email)+' and their email history? If you just want them to stop getting emails, set them to Unsubscribed instead.</span><button class="btn sm danger" type="button" id="cdYes">Delete</button></div>';
           $("#cdYes").onclick=function(){ api("DELETE","contacts/"+c.id).then(function(){ toast("Contact deleted"); st.panel=null; st.open=null; renderPanel(); load() }) };
         };
+        $$("[data-exit]",p).forEach(function(b){ b.onclick=function(){ api("POST","enrollments/"+b.dataset.exit+"/exit").then(function(){ toast("Taken out"); renderPanel() }).catch(function(e){ toast(e.message,true) }) } });
+        var ag=$("#cdAutoGo"); if(ag) ag.onclick=function(){ var qid=$("#cdAuto").value; if(!qid){ toast("Pick an automation first.",true); return }
+          api("POST","sequences/"+qid+"/enroll",{contact_id:c.id}).then(function(){ toast("Added. The first email goes out on schedule."); renderPanel() }).catch(function(e){ toast(e.message,true) }) };
         $$("[data-close]",p).forEach(function(b){ b.onclick=function(){ st.panel=null; st.open=null; renderPanel() } });
       }).catch(function(e){ p.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
       return;
@@ -516,6 +536,7 @@ function contactsView(listParam){
     }).catch(function(e){ toast(e.message,true) });
   }
   function refreshLists(){ return api("GET","lists").then(function(d){ lists=d.lists }) }
+  var want=store("studio.openContact"); if(want){ store("studio.openContact",""); st.open=want; st.panel="detail" }
   return refreshLists().then(function(){ renderShell(); return load() });
 }
 
@@ -545,7 +566,7 @@ function emailView(cid){
       '<div class="actions"><button class="btn" type="button" id="dupBtn">Duplicate</button>'+(cp.status!=="sending"?'<button class="btn danger" type="button" id="delBtn">Delete</button>':'')+'</div></div><div id="delConfirm"></div>';
     if(!editable){
       var sent=stats.sent||0;
-      html+='<div class="stats"><div><b>'+sent+'</b><span>delivered to the provider</span></div><div><b>'+pct(stats.opened||0,sent)+'</b><span>opened ('+(stats.opened||0)+')</span></div><div><b>'+pct(stats.clicked||0,sent)+'</b><span>clicked ('+(stats.clicked||0)+')</span></div><div><b>'+(stats.queued||0)+'</b><span>still queued</span></div><div><b>'+(stats.failed||0)+'</b><span>failed</span></div></div>';
+      html+='<div class="stats"><div><b>'+sent+'</b><span>sent'+(stats.queued?' · '+stats.queued+' to go':'')+'</span></div><div><b>'+pct(stats.opened||0,sent)+'</b><span>opened ('+(stats.opened||0)+')</span></div><div><b>'+pct(stats.clicked||0,sent)+'</b><span>clicked ('+(stats.clicked||0)+')</span></div><div><b>'+(stats.bounced||0)+'</b><span>bounced'+(stats.complained?' · '+stats.complained+' spam':'')+'</span></div><div><b>'+(stats.failed||0)+'</b><span>failed</span></div></div>';
       if(stats.failed) html+='<div class="notice danger"><p>'+stats.failed+' didn’t send. Last error: '+esc(stats.last_error||"unknown")+'</p><button class="btn sm" type="button" id="retryBtn">Try again</button></div>';
       html+='<p class="hint">Opens are approximate: some email apps block the tracking image, others load it automatically.</p>';
       html+='<div class="proof email"><div class="proofbar"><span class="url">'+esc(cp.subject)+'</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div>';
@@ -615,10 +636,168 @@ function emailView(cid){
   });
 }
 
+/* ============ automations ============ */
+var CONDS = [
+  ["always","Always send"],
+  ["opened","Only if they opened the last email"],
+  ["not_opened","Only if they didn’t open the last email"],
+  ["clicked","Only if they clicked a link in the last email"],
+  ["not_clicked","Only if they didn’t click the last email"]
+];
+var CONDS_SHORT = { opened:"if they opened the last one", not_opened:"if they didn’t open the last one", clicked:"if they clicked the last one", not_clicked:"if they didn’t click the last one" };
+function splitDelay(min){ if(!min) return [0,"days"]; if(min%1440===0) return [min/1440,"days"]; if(min%60===0) return [min/60,"hours"]; return [min,"minutes"] }
+function delayText(min, first){
+  if(!min) return first ? "Straight away" : "Straight after the last one";
+  var d=splitDelay(min), unit=d[1].replace(/s$/,""); return "Wait "+d[0]+" "+unit+(d[0]===1?"":"s");
+}
+function triggerText(q){
+  if(q.trigger==="click") return q.campaign_name ? "Clicks a link in “"+q.campaign_name+"”" : "Clicks a link in an email";
+  if(q.trigger==="manual") return "Added by hand";
+  return q.list_name ? "Joins "+q.list_name : "Joins a list";
+}
+
+function automationsView(){
+  return api("GET","sequences").then(function(d){
+    var v=$("#view");
+    var html=head("Marketing","Automations","Emails that send themselves when someone signs up or clicks, spaced out over days.",'<button class="btn primary" type="button" id="newAuto">New automation</button>')+emailBanner();
+    if(!d.sequences.length){
+      html+='<div class="empty"><b>No automations yet</b>A good first one: when someone joins a waitlist, send a welcome now, a behind-the-scenes email in 3 days, and a nudge a week later.</div>';
+    } else {
+      html+='<div class="tablewrap"><table><thead><tr><th>Automation</th><th>Starts when someone</th><th>Status</th><th class="r">Emails</th><th class="r">In it now</th><th class="r">Finished</th><th class="r">Sent</th></tr></thead><tbody>'+
+        d.sequences.map(function(q){
+          return '<tr class="click" data-go="'+esc(q.id)+'" tabindex="0"><td>'+esc(q.name)+'</td><td>'+esc(triggerText(q))+'</td><td><span class="chip '+esc(q.status)+'">'+esc(q.status==="active"?"on":q.status)+'</span></td>'+
+            '<td class="r mono">'+q.steps+'</td><td class="r mono">'+q.active+'</td><td class="r mono">'+q.completed+'</td><td class="r mono">'+q.sent+'</td></tr>' }).join("")+'</tbody></table></div>';
+    }
+    v.innerHTML=html;
+    $("#newAuto").onclick=function(){ this.disabled=true; api("POST","sequences",{name:"Untitled automation"}).then(function(r){ refreshNav(); go("#/automations/"+r.id) }).catch(function(e){ toast(e.message,true) }) };
+    $$("[data-go]").forEach(function(tr){ tr.onclick=function(){ go("#/automations/"+tr.dataset.go) }; tr.onkeydown=function(e){ if(e.key==="Enter") go("#/automations/"+tr.dataset.go) } });
+  });
+}
+
+function automationView(qid, stepParam){
+  return Promise.all([api("GET","sequences/"+qid), api("GET","lists"), api("GET","campaigns"), api("GET","sites")]).then(function(r){
+    var d=r[0], q=d.sequence, steps=d.steps, lists=r[1].lists, camps=r[2].campaigns, sites=r[3].sites, counts=d.counts||{};
+    var v=$("#view");
+    var sel = steps.filter(function(s){return s.id===stepParam})[0] || steps[0];
+    var on = q.status==="active";
+    var listById=function(id){ return lists.filter(function(l){return l.id===id})[0] };
+
+    var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/automations" style="color:inherit;text-decoration:none">Automations</a> · '+(on?"on":esc(q.status))+'</span><h1 id="aTitle">'+esc(q.name)+'</h1>'+
+      '<p class="sub">'+(counts.total||0)+' started · '+(counts.active||0)+' in it now · '+(counts.completed||0)+' finished'+(counts.exited?' · '+counts.exited+' left early':'')+'</p></div>'+
+      '<div class="actions"><button class="btn danger" type="button" id="aDel">Delete</button>'+
+      (on ? '<button class="btn" type="button" id="aPause">Pause</button>' : '<button class="btn primary" type="button" id="aOn">'+(q.status==="paused"?"Turn back on":"Turn on")+'</button>')+'</div></div><div id="aConfirm"></div>';
+    if(on) html+='<div class="notice"><p><b>This is on.</b> Changes to the emails apply to the next one each person gets. People already waiting keep their place.</p></div>';
+    else if(q.status==="paused") html+='<div class="notice"><p><b>Paused.</b> Nobody new starts and nothing sends. People already in it wait where they are until you turn it back on.</p></div>';
+    else html+=emailBanner();
+
+    // left: the flow
+    var flow='<div class="flow"><section class="node trig panel"><span class="eyebrow">Starts when someone</span>'+
+      '<div class="field"><label for="aName">Name</label><input type="text" id="aName" maxlength="80" value="'+esc(q.name)+'"></div>'+
+      '<div class="field"><label for="aTrig">Trigger</label><select id="aTrig">'+
+        [["list","Joins a list"],["click","Clicks a link in an email"],["manual","Is added by hand"]].map(function(o){ return '<option value="'+o[0]+'"'+(q.trigger===o[0]?" selected":"")+'>'+o[1]+'</option>' }).join("")+'</select></div>'+
+      '<div class="field" id="aListF"'+(q.trigger==="list"?"":" hidden")+'><label for="aList">List</label><select id="aList"><option value="">Pick a list</option>'+lists.map(function(l){ return '<option value="'+esc(l.id)+'"'+(q.trigger_list_id===l.id?" selected":"")+'>'+esc(l.name)+'</option>' }).join("")+'</select>'+
+        '<span class="hint">Counts new sign-ups from your pages (after they confirm, if double opt-in is on). Imports and people you add by hand don’t start it.</span></div>'+
+      '<div class="field" id="aCampF"'+(q.trigger==="click"?"":" hidden")+'><label for="aCamp">Email</label><select id="aCamp"><option value="">Pick an email</option>'+camps.map(function(c){ return '<option value="'+esc(c.id)+'"'+(q.trigger_campaign_id===c.id?" selected":"")+'>'+esc(c.name)+(c.status==="draft"?" (draft)":"")+'</option>' }).join("")+'</select>'+
+        '<span class="hint">Starts for anyone who clicks any link in that email, the first time they click.</span></div>'+
+      '<p class="hint" id="aManF"'+(q.trigger==="manual"?"":" hidden")+'>Add people from their page in Contacts.</p>'+
+      '<div class="field"><label for="aSite">Styled as</label><select id="aSite"><option value="">Just me</option>'+sites.map(function(s){ return '<option value="'+esc(s.id)+'"'+(q.site_id===s.id?" selected":"")+'>'+esc(s.name)+'</option>' }).join("")+'</select></div>'+
+      (on && q.trigger==="list" && q.trigger_list_id ? '<div class="actions"><button class="btn sm" type="button" id="aBack">Also start everyone already on '+esc((listById(q.trigger_list_id)||{}).name||"the list")+'</button></div><div id="aBackC"></div>' : '')+
+      '<span class="saving" id="aSave">Saved</span></section>';
+    steps.forEach(function(s,i){
+      flow+='<div class="wait"><span>'+esc(delayText(s.delay_minutes, i===0))+(i>0 && s.condition!=="always" ? ', then only '+esc(CONDS_SHORT[s.condition]) : '')+'</span></div>'+
+        '<a class="node step" href="#/automations/'+esc(q.id)+'/'+esc(s.id)+'" aria-current="'+(sel&&s.id===sel.id)+'"><span class="n">'+(i+1)+'</span><span class="t"><b>'+esc(s.subject||"No subject yet")+'</b>'+
+        '<small>'+(s.sent ? s.sent+' sent · '+pct(s.opened,s.sent)+' opened · '+pct(s.clicked,s.sent)+' clicked' : 'Not sent yet')+(s.queued?' · '+s.queued+' sending':'')+'</small></span></a>';
+    });
+    flow+='<div class="wait end"><span>'+(steps.length?"Then they’re done":"")+'</span></div><button class="btn" type="button" id="aAdd">Add an email</button>';
+    flow+='<section class="panel"><h2 class="sec">People <span class="hint">latest 25</span></h2>'+(d.people.length ? '<div class="tablewrap"><table><tbody>'+d.people.map(function(p){
+        var where = p.status==="active" ? "Email "+(p.step_index+1)+" due "+(p.next_at?fmtDate(p.next_at,true):"soon") : p.status==="completed" ? "Got every email" : "Left early: "+(p.exit_reason||"");
+        return '<tr><td><a href="#/contacts" data-contact="'+esc(p.contact_id)+'" style="text-decoration:none">'+esc(p.name||p.email)+'</a><span class="sub">'+esc(where)+'</span></td><td class="r"><span class="chip '+esc(p.status)+'">'+esc(p.status==="active"?"in it":p.status)+'</span></td></tr>' }).join("")+'</tbody></table></div>'
+      : '<div class="empty">Nobody yet.</div>')+'</section></div>';
+
+    // right: the selected email
+    var edit='';
+    if(sel){
+      var idx=steps.indexOf(sel), dl=splitDelay(sel.delay_minutes);
+      edit='<div class="stack"><form class="form panel" id="stForm" autocomplete="off"><h2 class="sec">Email '+(idx+1)+' of '+steps.length+' <span class="saving" id="stSave">Saved</span></h2>'+
+        '<div class="fieldrow"><div class="field"><label for="stWait">'+(idx===0?"After they start, wait":"After the last email, wait")+'</label><div class="affix"><input type="number" id="stWait" min="0" max="365" step="1" value="'+dl[0]+'" style="border:0;padding:8px 11px;background:none;width:100%"><select id="stUnit" style="border:0;border-left:1px solid var(--line);width:auto;background:var(--soft)">'+
+          ["minutes","hours","days"].map(function(u){ return '<option'+(dl[1]===u?" selected":"")+'>'+u+'</option>' }).join("")+'</select></div><span class="hint">0 sends it straight away.</span></div>'+
+        (idx>0 ? '<div class="field"><label for="stCond">Send it</label><select id="stCond">'+CONDS.map(function(c){ return '<option value="'+c[0]+'"'+(sel.condition===c[0]?" selected":"")+'>'+c[1]+'</option>' }).join("")+'</select><span class="hint">If not, this one is skipped and they carry on to the next.</span></div>' : '')+'</div>'+
+        '<div class="field"><label for="stSubj">Subject</label><input type="text" id="stSubj" maxlength="150" value="'+esc(sel.subject)+'" placeholder="What’s in it for them?"></div>'+
+        '<div class="field"><label for="stPre">Preview line</label><input type="text" id="stPre" maxlength="200" value="'+esc(sel.preheader)+'"><span class="hint">The grey text after the subject in most inboxes.</span></div>'+
+        '<div class="field"><label for="stBody">Message</label><textarea id="stBody" class="code">'+esc(sel.body)+'</textarea><span class="hint">{{name}} becomes their first name, or “there”. Markdown: ## heading, **bold**, [link](https://…), - list.</span></div>'+
+        '<div class="actions"><label class="sr" for="stTest">Send a test to</label><input type="email" id="stTest" value="'+esc(store("proof.testto")||S.me.email)+'" style="flex:1 1 200px;width:auto"><button class="btn" type="button" id="stTestBtn">Send test</button></div>'+
+        '<div class="actions"><button class="btn sm" type="button" id="stUp"'+(idx===0?" disabled":"")+'>Move up</button><button class="btn sm" type="button" id="stDown"'+(idx===steps.length-1?" disabled":"")+'>Move down</button><button class="btn sm danger" type="button" id="stDel">Delete this email</button></div><div id="stConfirm"></div>'+
+        '</form><div class="proof email"><div class="proofbar"><span class="url">inbox view</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div></div>';
+    } else edit='<div class="empty"><b>No emails yet</b>Add the first one on the left.</div>';
+
+    html+='<div class="flowgrid">'+flow+edit+'</div>';
+    v.innerHTML=html;
+
+    // automation settings
+    var qsave=saver($("#aSave"), function(x){ return api("PATCH","sequences/"+qid,x).then(function(r){ q=r.sequence; $("#aTitle").textContent=q.name }) });
+    $("#aName").oninput=function(){ qsave({name:this.value}) };
+    $("#aTrig").onchange=function(){ var t=this.value; $("#aListF").hidden=t!=="list"; $("#aCampF").hidden=t!=="click"; $("#aManF").hidden=t!=="manual"; qsave({trigger:t}); qsave.now() };
+    $("#aList").onchange=function(){ qsave({trigger_list_id:this.value||null}); qsave.now() };
+    $("#aCamp").onchange=function(){ qsave({trigger_campaign_id:this.value||null}); qsave.now() };
+    $("#aSite").onchange=function(){ qsave({site_id:this.value||null}); qsave.now(); if(typeof preview==="function") preview() };
+    var setStatus=function(st, msg){ qsave.now(); setTimeout(function(){ api("PATCH","sequences/"+qid,{status:st}).then(function(){ toast(msg); refreshNav(); route() }).catch(function(e){ toast(e.message,true) }) },300) };
+    var bOn=$("#aOn"); if(bOn) bOn.onclick=function(){ setStatus("active","On. New people start from now.") };
+    var bP=$("#aPause"); if(bP) bP.onclick=function(){ setStatus("paused","Paused") };
+    $("#aDel").onclick=function(){
+      $("#aConfirm").innerHTML='<div class="confirm"><span>Delete “'+esc(q.name)+'”? Anyone in it stops getting its emails. Emails already sent stay in each contact’s history.</span><button class="btn sm danger" type="button" id="adYes">Delete</button><button class="btn sm ghost" type="button" id="adNo">Keep it</button></div>';
+      $("#adNo").onclick=function(){ $("#aConfirm").innerHTML="" };
+      $("#adYes").onclick=function(){ api("DELETE","sequences/"+qid).then(function(){ toast("Automation deleted"); refreshNav(); go("#/automations") }).catch(function(e){ toast(e.message,true) }) };
+    };
+    var back=$("#aBack"); if(back) back.onclick=function(){
+      var l=listById(q.trigger_list_id);
+      $("#aBackC").innerHTML='<div class="confirm"><span>Start up to '+(l?l.subscribed:0)+' people who are already on '+esc(l?l.name:"the list")+'? Anyone who’s been through it before is skipped.</span><button class="btn sm primary" type="button" id="abYes">Start them</button><button class="btn sm ghost" type="button" id="abNo">Not now</button></div>';
+      $("#abNo").onclick=function(){ $("#aBackC").innerHTML="" };
+      $("#abYes").onclick=function(){ this.disabled=true; api("POST","sequences/"+qid+"/enroll-list").then(function(r){ toast(r.added+" started"); route() }).catch(function(e){ toast(e.message,true) }) };
+    };
+    $("#aAdd").onclick=function(){ this.disabled=true; api("POST","sequences/"+qid+"/steps").then(function(){ return api("GET","sequences/"+qid) }).then(function(x){ var last=x.steps[x.steps.length-1]; go("#/automations/"+qid+"/"+last.id) }).catch(function(e){ toast(e.message,true) }) };
+    $$("[data-contact]").forEach(function(a){ a.onclick=function(e){ e.preventDefault(); store("studio.openContact",a.dataset.contact); go("#/contacts") } });
+
+    if(!sel) return;
+    // selected email
+    var t, preview=function(){ clearTimeout(t); t=setTimeout(function(){ emailPreview($("#pv"),{ subject:$("#stSubj").value, preheader:$("#stPre").value, body:$("#stBody").value, site_id:$("#aSite").value||null }) },250) };
+    S.cleanup.push(function(){ clearTimeout(t) });
+    var ssave=saver($("#stSave"), function(x){ return api("PATCH","steps/"+sel.id,x).then(function(r){ Object.assign(sel, r.step);
+      var node=$('.node.step[aria-current="true"] b'); if(node) node.textContent=sel.subject||"No subject yet";
+      var w=$('.node.step[aria-current="true"]'); w=w&&w.previousElementSibling; var i=steps.indexOf(sel);
+      if(w) w.firstChild.textContent=delayText(sel.delay_minutes, i===0)+(i>0 && sel.condition!=="always" ? ', then only '+CONDS_SHORT[sel.condition] : '') }) });
+    var delay=function(){ var n=Math.max(0, Math.round(Number($("#stWait").value)||0)), u=$("#stUnit").value; return n*(u==="days"?1440:u==="hours"?60:1) };
+    $("#stWait").oninput=function(){ ssave({delay_minutes:delay()}) };
+    $("#stUnit").onchange=function(){ ssave({delay_minutes:delay()}); ssave.now() };
+    var c=$("#stCond"); if(c) c.onchange=function(){ ssave({condition:this.value}); ssave.now() };
+    $("#stSubj").oninput=function(){ ssave({subject:this.value}); preview() };
+    $("#stPre").oninput=function(){ ssave({preheader:this.value}); preview() };
+    $("#stBody").oninput=function(){ ssave({body:this.value}); preview() };
+    $("#stTestBtn").onclick=function(){ var to=$("#stTest").value.trim(), b=this; store("proof.testto",to); ssave.now(); b.disabled=true;
+      setTimeout(function(){ api("POST","steps/"+sel.id+"/test",{to:to}).then(function(){ toast("Test sent to "+to) }).catch(function(e){ toast(e.message,true) }).then(function(){ b.disabled=false }) },400) };
+    var move=function(dir){ ssave.now(); api("POST","steps/"+sel.id+"/move",{dir:dir}).then(function(){ route() }).catch(function(e){ toast(e.message,true) }) };
+    $("#stUp").onclick=function(){ move(-1) };
+    $("#stDown").onclick=function(){ move(1) };
+    $("#stDel").onclick=function(){
+      $("#stConfirm").innerHTML='<div class="confirm"><span>Delete this email? People waiting for it skip to the next one.</span><button class="btn sm danger" type="button" id="sdYes">Delete</button><button class="btn sm ghost" type="button" id="sdNo">Keep it</button></div>';
+      $("#sdNo").onclick=function(){ $("#stConfirm").innerHTML="" };
+      $("#sdYes").onclick=function(){ api("DELETE","steps/"+sel.id).then(function(){ toast("Email deleted"); go("#/automations/"+qid) }).catch(function(e){ toast(e.message,true) }) };
+    };
+    preview();
+  });
+}
+
 /* ============ settings ============ */
 function settingsView(){
-  return api("GET","settings").then(function(d){
-    var s=d.settings, v=$("#view");
+  return Promise.all([api("GET","settings"), api("GET","settings/events")]).then(function(r){
+    var s=r[0].settings, ev=r[1], v=$("#view"), dbl=s.double_optin==="1";
+    var evName={"email.bounced":"Bounced","email.complained":"Marked as spam","email.failed":"Couldn’t send","email.suppressed":"On do-not-send list"};
+    var hooks = ev.connected
+      ? '<div class="pad stack" style="gap:10px"><p style="margin:0"><span class="chip sent">Connected</span> Studio stops emailing addresses that bounce or mark you as spam, and takes them out of automations.</p>'+
+        '<p class="hint" style="margin:0">'+ev.bounced+' bounced · '+ev.complained+' marked as spam · '+(ev.lastEvent?'last update '+fmtDate(ev.lastEvent,true):'no updates from Resend yet (they arrive after your next send)')+'</p></div>'+
+        (ev.recent.length ? '<div class="tablewrap"><table><tbody>'+ev.recent.map(function(e){ return '<tr><td>'+esc(e.email||"—")+'<span class="sub">'+esc(e.detail||"")+'</span></td><td>'+esc(evName[e.type]||e.type)+'</td><td class="r mono">'+fmtDate(e.created_at,true)+'</td></tr>' }).join("")+'</tbody></table></div>' : '')+
+        '<div class="pad"><button class="btn sm ghost" type="button" id="whReplace">Replace the signing secret</button><div id="whManual" hidden></div></div>'
+      : '<div class="pad stack" style="gap:12px"><p style="margin:0">Let Resend tell Studio when an email bounces or someone marks it as spam, so Studio stops emailing them. This protects your sending reputation.</p>'+
+        '<div class="actions"><button class="btn primary" type="button" id="whAuto">Connect automatically</button></div><div id="whManual"></div></div>';
     v.innerHTML=head("Workspace","Settings","How your emails and signup forms introduce you.")+
       '<div class="grid2"><form class="form panel" id="setForm" autocomplete="off"><h2 class="sec">Sender <span class="saving" id="setSave">Saved</span></h2>'+
       '<div class="fieldrow"><div class="field"><label for="sName">From name</label><input type="text" id="sName" data-k="sender_name" maxlength="60" value="'+esc(s.sender_name)+'"><span class="hint">Emails styled as a site show “'+esc(s.sender_name)+' at Seek”.</span></div>'+
@@ -626,14 +805,37 @@ function settingsView(){
       '<div class="field"><label for="sReply">Replies go to</label><input type="email" id="sReply" data-k="reply_to" maxlength="120" value="'+esc(s.reply_to)+'" placeholder="Same as the from address"></div>'+
       '<div class="field"><label for="sAddr">Postal address</label><input type="text" id="sAddr" data-k="postal_address" maxlength="200" value="'+esc(s.postal_address)+'"><span class="hint">Marketing email law (GDPR, CAN-SPAM) expects a way to reach you. It sits small in every email footer. A PO box or business address is fine.</span></div>'+
       '<h2 class="sec">Signup forms</h2>'+
-      '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Proof keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
-      '</form><div class="stack"><section class="panel"><h2 class="sec">Connections</h2><div class="rows">'+
+      '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
+      '<div class="actions"><button type="button" class="switch" role="switch" id="sDbl" aria-checked="'+dbl+'" aria-labelledby="sDblLbl"></button><span id="sDblLbl">Ask new sign-ups to confirm their email</span></div>'+
+      '<p class="hint">When this is on, people get a “tap to confirm” email first. Welcome emails and automations start once they tap it. Fewer typos and fake addresses on your lists, at the cost of some people never confirming.</p>'+
+      '</form><div class="stack"><section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
+      '<section class="panel"><h2 class="sec">Connections</h2><div class="rows">'+
       '<div class="rowi" style="--pc:var(--'+(S.me.emailConnected?"moss":"brass")+')"><span class="t">Email sending<small>Resend, from @'+esc(S.me.root)+'</small></span><span class="meta"><span class="chip '+(S.me.emailConnected?"sent":"draft")+'">'+(S.me.emailConnected?(S.me.dev?"Simulated":"Connected"):"Not yet")+'</span></span></div>'+
-      '<div class="rowi" style="--pc:var(--moss)"><span class="t">Sign-in<small>'+esc(S.me.email)+'</small></span><span class="meta"><span class="chip sent">'+(S.me.dev?"Dev mode":"Cloudflare Access")+'</span></span></div>'+
+      '<div class="rowi" style="--pc:var(--'+(ev.connected?"moss":"brass")+')"><span class="t">Delivery updates<small>Bounces and spam reports from Resend</small></span><span class="meta"><span class="chip '+(ev.connected?"sent":"draft")+'">'+(ev.connected?"Connected":"Not yet")+'</span></span></div>'+
+      '<div class="rowi" style="--pc:var(--moss)"><span class="t">Sign-in<small>'+esc(S.me.email)+'</small></span><span class="meta"><span class="chip sent">'+(S.me.dev?"Dev mode":"Email link")+'</span></span></div>'+
       '<div class="rowi" style="--pc:var(--moss)"><span class="t">Domain<small>*.'+esc(S.me.root)+'</small></span><span class="meta"><span class="chip sent">Every subdomain</span></span></div>'+
       '</div></section>'+(S.me.dev?'<p class="hint">This is the local test copy. Nothing is really emailed.</p>':'')+'</div></div>';
     var save=saver($("#setSave"), function(x){ return api("PUT","settings",x) });
     $$("[data-k]",v).forEach(function(i){ i.oninput=function(){ var o={}; o[i.dataset.k]=i.value; save(o) } });
+    $("#sDbl").onclick=function(){ var on=this.getAttribute("aria-checked")!=="true"; this.setAttribute("aria-checked",String(on)); save({double_optin:on?"1":"0"}); save.now(); toast(on?"New sign-ups will be asked to confirm":"Sign-ups join straight away") };
+
+    function manual(host, note){
+      host.hidden=false;
+      host.innerHTML=(note?'<div class="notice"><p>'+esc(note)+'</p></div>':'')+
+        '<ol class="steps"><li>In Resend, open <b>Webhooks</b> and click <b>Add webhook</b>.</li>'+
+        '<li>Paste this as the endpoint URL:<div class="affix" style="margin-top:6px"><input type="text" id="whUrl" readonly value="'+esc(ev.endpoint)+'"><button class="btn sm" type="button" id="whCopy" style="border:0;border-left:1px solid var(--line)">Copy</button></div>'+
+        'Tick these events: <b>email.bounced</b>, <b>email.complained</b>, <b>email.delivered</b>, <b>email.failed</b> and <b>email.suppressed</b>. Then save it.</li>'+
+        '<li>Open the new webhook, copy its <b>signing secret</b> (it starts with whsec_) and paste it here:'+
+        '<div class="actions" style="margin-top:6px"><label class="sr" for="whSecret">Signing secret</label><input type="password" id="whSecret" autocomplete="off" spellcheck="false" placeholder="whsec_…" style="flex:1 1 220px;width:auto"><button class="btn primary" type="button" id="whSave">Save</button></div></li></ol>';
+      $("#whCopy").onclick=function(){ var i=$("#whUrl"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){ toast("Copied") },function(){ document.execCommand("copy"); toast("Copied") }) };
+      $("#whSave").onclick=function(){ var val=$("#whSecret").value.trim(); if(!val){ toast("Paste the signing secret first.",true); return }
+        api("PUT","settings/webhook-secret",{secret:val}).then(function(){ toast("Connected"); route() }).catch(function(e){ toast(e.message,true) }) };
+    }
+    var auto=$("#whAuto");
+    if(auto) auto.onclick=function(){ var b=this; b.disabled=true; b.textContent="Connecting…";
+      api("POST","settings/connect-resend").then(function(){ toast("Connected"); route() })
+        .catch(function(e){ b.disabled=false; b.textContent="Connect automatically"; manual($("#whManual"), e.message) }) };
+    var rp=$("#whReplace"); if(rp) rp.onclick=function(){ this.hidden=true; manual($("#whManual")) };
   });
 }
 

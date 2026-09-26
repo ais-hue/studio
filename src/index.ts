@@ -3,12 +3,19 @@ import { authEmail } from "./auth";
 import { handleApi } from "./api";
 import { handlePublic, serveStatic } from "./public";
 import { runScheduled } from "./email";
-import { SCHEMA } from "./schema";
+import { ALTERS, SCHEMA } from "./schema";
 import { handleAuth } from "./login";
 
 let schemaReady: Promise<unknown> | null = null;
+async function applySchema(env: Env) {
+  await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
+  for (const q of ALTERS) {
+    try { await env.DB.prepare(q).run(); }
+    catch (e) { if (!/duplicate column/i.test(String((e as Error)?.message || e))) throw e; }
+  }
+}
 function ensureSchema(env: Env) {
-  if (!schemaReady) schemaReady = env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q))).catch((e) => { schemaReady = null; throw e; });
+  if (!schemaReady) schemaReady = applySchema(env).catch((e) => { schemaReady = null; throw e; });
   return schemaReady;
 }
 

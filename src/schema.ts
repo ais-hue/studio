@@ -1,4 +1,5 @@
-// Generated from migrations/*.sql. Runs once per worker instance; every statement is idempotent.
+// Generated from migrations/*.sql by scripts/schema.mjs. Runs once per worker instance.
+// SCHEMA statements are idempotent; ALTERS run one by one and "duplicate column" errors are ignored.
 export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT NOT NULL )",
  "CREATE TABLE IF NOT EXISTS sites ( id TEXT PRIMARY KEY, name TEXT NOT NULL, subdomain TEXT NOT NULL UNIQUE, accent TEXT NOT NULL DEFAULT 'brass', theme TEXT NOT NULL DEFAULT 'auto', status TEXT NOT NULL DEFAULT 'building', tagline TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL )",
@@ -15,5 +16,23 @@ export const SCHEMA: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_contacts_time ON contacts(created_at)",
  "CREATE TABLE IF NOT EXISTS login_tokens ( hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL )",
  "CREATE TABLE IF NOT EXISTS sessions ( hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, user_agent TEXT NOT NULL DEFAULT '' )",
- "CREATE INDEX IF NOT EXISTS idx_login_email ON login_tokens(email, created_at)"
+ "CREATE INDEX IF NOT EXISTS idx_login_email ON login_tokens(email, created_at)",
+ "CREATE TABLE IF NOT EXISTS sequences ( id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', trigger TEXT NOT NULL DEFAULT 'list', trigger_list_id TEXT, trigger_campaign_id TEXT, site_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS sequence_steps ( id TEXT PRIMARY KEY, sequence_id TEXT NOT NULL, position INTEGER NOT NULL, delay_minutes INTEGER NOT NULL DEFAULT 0, condition TEXT NOT NULL DEFAULT 'always', subject TEXT NOT NULL DEFAULT '', preheader TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS enrollments ( id TEXT PRIMARY KEY, sequence_id TEXT NOT NULL, contact_id TEXT NOT NULL, step_index INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', exit_reason TEXT, next_at INTEGER, last_send_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (sequence_id, contact_id) )",
+ "CREATE TABLE IF NOT EXISTS email_events ( id TEXT PRIMARY KEY, type TEXT NOT NULL, provider_id TEXT, email TEXT, detail TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_steps_seq ON sequence_steps(sequence_id, position)",
+ "CREATE INDEX IF NOT EXISTS idx_enroll_due ON enrollments(status, next_at)",
+ "CREATE INDEX IF NOT EXISTS idx_enroll_seq ON enrollments(sequence_id, status)",
+ "CREATE INDEX IF NOT EXISTS idx_enroll_c ON enrollments(contact_id)",
+ "CREATE INDEX IF NOT EXISTS idx_sends_provider ON sends(provider_id)",
+ "CREATE INDEX IF NOT EXISTS idx_events_time ON email_events(created_at)",
+];
+export const ALTERS: string[] = [
+ "ALTER TABLE sends ADD COLUMN step_id TEXT",
+ "ALTER TABLE sends ADD COLUMN enrollment_id TEXT",
+ "ALTER TABLE sends ADD COLUMN delivered_at INTEGER",
+ "ALTER TABLE sends ADD COLUMN bounced_at INTEGER",
+ "ALTER TABLE sends ADD COLUMN complained_at INTEGER",
+ "CREATE INDEX IF NOT EXISTS idx_sends_step ON sends(step_id)",
 ];

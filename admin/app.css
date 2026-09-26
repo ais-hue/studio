@@ -43,6 +43,7 @@ body{margin:0;background:var(--bg);color:var(--t1);font-family:var(--f);font-siz
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:inherit;text-underline-offset:3px}
 :focus-visible{outline:2px solid var(--coral);outline-offset:2px}
+[hidden]{display:none !important}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 svg{fill:none;stroke:currentColor;stroke-width:1.5}
 
@@ -282,3 +283,32 @@ textarea.code{min-height:260px;font-size:13px}
 .form.panel h2.sec:not(:first-child){border-top:1px solid var(--line);margin-top:8px}
 .form.panel>.notice{margin-top:0}
 #tabBody{display:flex;flex-direction:column;gap:20px}
+
+/* ---------- automations ---------- */
+.flowgrid{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:1000px){.flowgrid{grid-template-columns:1fr}}
+.flow{display:flex;flex-direction:column}
+.flow>.panel:last-child{margin-top:20px}
+.node.trig{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.node.trig .saving{align-self:flex-end}
+.node.step{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;background:var(--surface);border:1px solid var(--line);text-decoration:none}
+.node.step:hover{border-color:var(--line2)}
+.node.step[aria-current="true"]{background:var(--soft);box-shadow:inset 3px 0 0 var(--coral);border-color:var(--line2)}
+.node .n{width:24px;height:24px;flex:none;background:var(--t1);color:var(--bg);font-size:12px;font-weight:600;display:grid;place-items:center;font-variant-numeric:tabular-nums}
+.node.step[aria-current="true"] .n{background:var(--coral);color:var(--on-coral)}
+.node .t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.node .t b{font-weight:500;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .t small{font-size:12px;color:var(--t3)}
+.flow .wait{margin-left:26px;border-left:2px solid var(--line2);padding:10px 0 10px 16px;font-size:12px;color:var(--t2)}
+.flow .wait.end{padding-bottom:14px}
+.flow .wait.end span:empty{display:none}
+.flow>#aAdd{align-self:flex-start}
+.chip.active,.chip.completed{color:var(--good);border-color:var(--good)}
+.chip.exited,.chip.pending{color:var(--warn);border-color:var(--warn)}
+.chip.complained{color:var(--danger);border-color:var(--danger)}
+.drawer h2.sec:not(:first-child){border-top:1px solid var(--line);margin-top:6px}
+ol.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:14px;font-size:13.5px}
+ol.steps li{padding-left:4px}
+input[type=number],input[type=password]{background:var(--field);border:1px solid var(--line2);padding:8px 11px;font-size:13.5px;color:var(--t1)}
+input[type=number]:focus,input[type=password]:focus{outline:none;border-color:var(--coral)}
+.drawer h2.sec+.tablewrap{margin-top:-14px}

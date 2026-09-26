@@ -1,6 +1,8 @@
 import { Env, HttpError, esc, getSettings, html, id, isEmail, json, now, token } from "./util";
 import { Page, RenderOpts, Site, renderBlog, renderNotice, renderPage } from "./render";
-import { processQueue } from "./email";
+import { processQueue, sendConfirmation } from "./email";
+import { exitAll, onCampaignClick, onListJoin, runSequences } from "./automation";
+import { handleResendWebhook } from "./hooks";
 
 export async function serveStatic(req: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(req.url);
@@ -26,24 +28,32 @@ export function defaultWelcome(name: string): string {
   return `Hi {{name}},\n\nThanks for signing up for **${name}**. You’ll be first to hear when there’s news.\n\nTalk soon,\nAisling`;
 }
 
-/** Add or re-subscribe a contact and put them on a list. Returns whether they were newly added to the list. */
+/**
+ * Add or re-subscribe a contact and put them on a list. Returns whether they were newly added to the list.
+ * With pending (double opt-in), someone who isn't already subscribed waits as "pending" until they confirm.
+ */
 export async function upsertContact(
   env: Env, email: string, name: string, source: string, consentText: string | null, listId: string | null,
-): Promise<{ contactId: string; added: boolean; created: boolean }> {
+  opts: { pending?: boolean } = {},
+): Promise<{ contactId: string; added: boolean; created: boolean; status: string; token: string; name: string }> {
   const t = now();
-  let c = await env.DB.prepare("SELECT id, status, name FROM contacts WHERE email = ?").bind(email).first<{ id: string; status: string; name: string }>();
+  let c = await env.DB.prepare("SELECT id, status, name, token FROM contacts WHERE email = ?").bind(email).first<{ id: string; status: string; name: string; token: string }>();
   let created = false;
+  const joinStatus = opts.pending ? "pending" : "subscribed";
   if (!c) {
-    const cid = id("c_");
+    const cid = id("c_"), tk = token();
     await env.DB.prepare(`INSERT INTO contacts (id, email, name, status, source, consent_at, consent_text, token, created_at, updated_at)
-      VALUES (?, ?, ?, 'subscribed', ?, ?, ?, ?, ?, ?)`)
-      .bind(cid, email, name, source, consentText ? t : null, consentText || "", token(), t, t).run();
-    c = { id: cid, status: "subscribed", name };
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(cid, email, name, joinStatus, source, consentText && !opts.pending ? t : null, consentText || "", tk, t, t).run();
+    c = { id: cid, status: joinStatus, name, token: tk };
     created = true;
   } else {
     const sets: string[] = ["updated_at = ?"]; const vals: unknown[] = [t];
-    if (name && !c.name) { sets.push("name = ?"); vals.push(name); }
-    if (consentText && c.status !== "subscribed") { sets.push("status = 'subscribed'", "consent_at = ?", "consent_text = ?"); vals.push(t, consentText); }
+    if (name && !c.name) { sets.push("name = ?"); vals.push(name); c.name = name; }
+    if (consentText && c.status !== "subscribed") {
+      sets.push("status = ?", "consent_at = ?", "consent_text = ?"); vals.push(joinStatus, opts.pending ? null : t, consentText);
+      c.status = joinStatus;
+    }
     await env.DB.prepare(`UPDATE contacts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, c.id).run();
   }
   let added = false;
@@ -52,7 +62,7 @@ export async function upsertContact(
       .bind(listId, c.id, t).run();
     added = (r.meta?.changes || 0) > 0;
   }
-  return { contactId: c.id, added, created };
+  return { contactId: c.id, added, created, status: c.status, token: c.token, name: c.name };
 }
 
 async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: string): Promise<Response> {
@@ -78,22 +88,62 @@ async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: st
 
   const settings = await getSettings(env);
   const list = await siteList(env, site);
-  const r = await upsertContact(env, email, name, `${site.subdomain}/${page.slug || "home"}`, settings.consent_text, list.id);
-  if (r.added && list.welcome_enabled) {
-    await env.DB.prepare("INSERT INTO sends (id, list_id, kind, contact_id, email, created_at) VALUES (?, ?, 'welcome', ?, ?, ?)")
-      .bind(id("s_"), list.id, r.contactId, email, now()).run();
-    ctx.waitUntil(processQueue(env, 10));
-  }
+  const r = await upsertContact(env, email, name, `${site.subdomain}/${page.slug || "home"}`, settings.consent_text, list.id, { pending: settings.double_optin === "1" });
   const back = new URL(req.headers.get("referer") || `https://${host}/`);
+  if (r.status === "pending") {
+    // At most one confirmation email per address every 10 minutes, so the form can't be used to flood someone.
+    const recent = await env.DB.prepare("SELECT 1 FROM sends WHERE kind = 'confirm' AND contact_id = ? AND created_at > ?").bind(r.contactId, now() - 600_000).first();
+    if (!recent) {
+      const sid = id("s_");
+      await env.DB.prepare("INSERT INTO sends (id, list_id, kind, contact_id, email, status, created_at) VALUES (?, ?, 'confirm', ?, ?, 'sent', ?)").bind(sid, list.id, r.contactId, email, now()).run();
+      ctx.waitUntil(sendConfirmation(env, { email, name: r.name, token: r.token }, site).then((x) =>
+        env.DB.prepare("UPDATE sends SET status = ?, error = ?, sent_at = ? WHERE id = ?").bind(x.ok ? "sent" : "failed", x.error || null, x.ok ? now() : null, sid).run()));
+    }
+    back.searchParams.set("joined", "confirm");
+    return reply(200, { message: "Almost there. Check your inbox and tap the link to confirm." }, back.toString());
+  }
+  let welcome = false;
+  if (r.added && r.status === "subscribed") {
+    welcome = await onListJoin(env, list.id, r.contactId, email);
+    if (welcome) ctx.waitUntil(sendNow(env));
+  }
   back.searchParams.set("joined", "1");
   return reply(200, { message: list.welcome_enabled ? "You’re on the list. Check your inbox." : "You’re on the list." }, back.toString());
+}
+
+/** Send anything due right now (welcome emails, "straight away" automation emails) instead of waiting for the next minute. */
+async function sendNow(env: Env): Promise<void> {
+  await runSequences(env, 20);
+  await processQueue(env, 20);
+}
+
+/** Double opt-in: the link in the confirmation email. GET shows a page that confirms itself; the POST does the work. */
+async function confirm(req: Request, env: Env, ctx: ExecutionContext, tk: string, o: RenderOpts): Promise<Response> {
+  const c = await env.DB.prepare("SELECT id, email, status FROM contacts WHERE token = ?").bind(tk).first<{ id: string; email: string; status: string }>();
+  if (!c) return html(renderNotice(null, "Link expired", "This confirmation link isn’t valid any more. Sign up again and we’ll send a fresh one.", o), 404);
+  if (c.status === "subscribed") return html(renderNotice(null, "You’re in", `${esc(c.email)} is confirmed. Thanks!`, o));
+  if (c.status !== "pending") return html(renderNotice(null, "Nothing to confirm", `${esc(c.email)} isn’t waiting to be confirmed. Sign up again if you’d like to hear from us.`, o), 400);
+  if (req.method !== "POST") {
+    return html(renderNotice(null, "Confirm your email", `<form method="post" id="cf"><p>Confirm <b>${esc(c.email)}</b>?</p><button type="submit" style="font:inherit;font-weight:600;background:var(--text);color:var(--bg);border:0;padding:10px 18px;cursor:pointer">Yes, sign me up</button></form><script>document.getElementById("cf").submit()</script>`, o), 200, { "cache-control": "no-store" });
+  }
+  const t = now();
+  const r = await env.DB.prepare("UPDATE contacts SET status = 'subscribed', consent_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'").bind(t, t, c.id).run();
+  if (r.meta?.changes) {
+    const { results } = await env.DB.prepare("SELECT list_id FROM list_members WHERE contact_id = ?").bind(c.id).all<{ list_id: string }>();
+    let queued = false;
+    for (const l of results) if (await onListJoin(env, l.list_id, c.id, c.email)) queued = true;
+    if (queued) ctx.waitUntil(sendNow(env));
+  }
+  return html(renderNotice(null, "You’re in", `${esc(c.email)} is confirmed. Thanks for signing up.`, o));
 }
 
 /* ---------- go.<domain>: unsubscribe, open + click tracking ---------- */
 const PIXEL = Uint8Array.from(atob("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"), (c) => c.charCodeAt(0));
 
-async function handleGo(req: Request, env: Env, url: URL, o: RenderOpts): Promise<Response> {
+async function handleGo(req: Request, env: Env, ctx: ExecutionContext, url: URL, o: RenderOpts): Promise<Response> {
   const parts = url.pathname.split("/").filter(Boolean);
+  if (parts[0] === "hooks" && parts[1] === "resend" && req.method === "POST") return handleResendWebhook(req, env);
+  if (parts[0] === "confirm" && parts[1]) return confirm(req, env, ctx, parts[1], o);
   if (parts[0] === "o" && parts[1]) {
     const sid = parts[1].replace(/\.gif$/, "");
     await env.DB.prepare("UPDATE sends SET opened_at = COALESCE(opened_at, ?) WHERE id = ?").bind(now(), sid).run();
@@ -103,8 +153,10 @@ async function handleGo(req: Request, env: Env, url: URL, o: RenderOpts): Promis
     const target = url.searchParams.get("u") || "";
     if (!/^https?:\/\//i.test(target)) return new Response("Link not found", { status: 404 });
     const t = now();
-    const r = await env.DB.prepare("UPDATE sends SET clicked_at = COALESCE(clicked_at, ?), opened_at = COALESCE(opened_at, ?) WHERE id = ?").bind(t, t, parts[1]).run();
-    if (!r.meta?.changes) return new Response("Link not found", { status: 404 });
+    const s = await env.DB.prepare("SELECT campaign_id, contact_id, clicked_at FROM sends WHERE id = ?").bind(parts[1]).first<{ campaign_id: string | null; contact_id: string | null; clicked_at: number | null }>();
+    if (!s) return new Response("Link not found", { status: 404 });
+    await env.DB.prepare("UPDATE sends SET clicked_at = COALESCE(clicked_at, ?), opened_at = COALESCE(opened_at, ?) WHERE id = ?").bind(t, t, parts[1]).run();
+    if (!s.clicked_at && s.campaign_id && s.contact_id) ctx.waitUntil(onCampaignClick(env, s.campaign_id, s.contact_id).then(() => sendNow(env)));
     return Response.redirect(target, 302);
   }
   if (parts[0] === "u" && parts[1]) {
@@ -114,6 +166,7 @@ async function handleGo(req: Request, env: Env, url: URL, o: RenderOpts): Promis
       const form = await req.formData().catch(() => null);
       const again = form?.get("action") === "resubscribe";
       await env.DB.prepare("UPDATE contacts SET status = ?, updated_at = ? WHERE id = ?").bind(again ? "subscribed" : "unsubscribed", now(), c.id).run();
+      if (!again) await exitAll(env, c.id, "unsubscribed");
       // one-click unsubscribe from mail clients posts "List-Unsubscribe=One-Click"
       if (form?.get("List-Unsubscribe") === "One-Click") return new Response("Unsubscribed", { status: 200 });
       return html(renderNotice(null, again ? "Welcome back" : "You’re unsubscribed",
@@ -138,7 +191,7 @@ export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext
   const settings = await getSettings(env);
   const base: RenderOpts = { host, consentText: settings.consent_text, hasBlog: false };
 
-  if (sub === "go") return handleGo(req, env, url, base);
+  if (sub === "go") return handleGo(req, env, ctx, url, base);
   if (p === "/__proof/subscribe" && req.method === "POST") return subscribe(req, env, ctx, host);
 
   const site = await env.DB.prepare("SELECT * FROM sites WHERE subdomain = ?").bind(sub).first<Site>();

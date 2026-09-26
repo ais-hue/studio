@@ -6,6 +6,7 @@ export interface Env {
   ACCESS_AUD: string;
   DEV_AUTH: string;
   RESEND_API_KEY?: string;
+  RESEND_WEBHOOK_SECRET?: string;
   ADMIN_EMAILS: string;
 }
 
@@ -151,7 +152,11 @@ export async function getSettings(env: Env): Promise<Record<string, string>> {
     reply_to: "",
     postal_address: "",
     consent_text: "I’d like to get emails about this. I can unsubscribe any time.",
+    double_optin: "0",
   };
   for (const r of results) s[r.key] = r.value;
   return s;
 }
+
+/** Settings that are stored but never sent back to the browser. */
+export const PRIVATE_SETTINGS = new Set(["resend_webhook_secret", "resend_webhook_id"]);
