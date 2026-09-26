@@ -1,6 +1,7 @@
 import { Env, HttpError, getSettings, id, isEmail, json, now } from "./util";
 import { PLATFORMS, SocialPost, getSlots, listAccounts, listProfiles, nextSlot, problems } from "./social";
-import { FileRow, fileUrl, storeBytes } from "./files";
+import { FileRow, fileUrl, storeBytes, storeStream, typeFromName } from "./files";
+import { createUploadLink, uploadLinkStatus } from "./uploads";
 import { performance } from "./performance";
 import { linkStats } from "./links";
 import { VERSION } from "./version";
@@ -57,15 +58,25 @@ async function importUrl(env: Env, u: string, folder: string, alt: string, name?
     const f = await env.DB.prepare("SELECT * FROM files WHERE key = ?").bind(decodeURIComponent(url.pathname.slice(1))).first<FileRow>();
     if (f) return f;
   }
+  // Share links from Google Drive and Dropbox: go straight to the file.
+  const drive = url.hostname.endsWith("drive.google.com") && (url.pathname.match(/\/file\/d\/([\w-]+)/)?.[1] || url.searchParams.get("id"));
+  if (drive) url = new URL(`https://drive.usercontent.google.com/download?id=${drive}&export=download&confirm=t`);
+  if (/(^|\.)dropbox\.com$/.test(url.hostname)) url.searchParams.set("dl", "1");
   const res = await fetch(url.toString(), { redirect: "follow", headers: { "user-agent": "Studio/1.0 (+https://studio." + env.ROOT_DOMAIN + ")" } });
-  if (!res.ok) throw new HttpError(502, `Couldn’t download ${url.hostname}: ${res.status}.`);
-  const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (!res.ok || !res.body) throw new HttpError(502, `Couldn’t download ${url.hostname}: ${res.status}. If it’s private, make it “anyone with the link”, or use create_upload_link.`);
+  let type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (type.startsWith("text/html")) throw new HttpError(400, `${url.hostname} sent a web page, not a file. The link may be private or need a sign-in. Use create_upload_link instead.`);
+  const cd = res.headers.get("content-disposition") || "";
+  const cdName = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || cd.match(/filename="?([^";]+)"?/i)?.[1] || "").trim());
+  const fileName = name || cdName || decodeURIComponent(url.pathname.split("/").pop() || "") || "download";
+  if (!type || type === "application/octet-stream" || type === "binary/octet-stream") type = typeFromName(fileName) || type;
   const len = Number(res.headers.get("content-length")) || 0;
-  if (len > 50 * 1024 * 1024) throw new HttpError(413, "That file is over 50 MB. Upload it in Studio instead.");
+  const MAX = 500 * 1024 * 1024;
+  if (len > MAX) throw new HttpError(413, "That file is over 500 MB. Use create_upload_link so it can go up in parts.");
+  if (len > 20 * 1024 * 1024) return storeStream(env, res.body, len, { name: fileName, type, folder, alt });
   const bytes = new Uint8Array(await res.arrayBuffer());
-  if (bytes.byteLength > 50 * 1024 * 1024) throw new HttpError(413, "That file is over 50 MB. Upload it in Studio instead.");
-  const fallback = decodeURIComponent(url.pathname.split("/").pop() || "") || "download";
-  return storeBytes(env, bytes, { name: name || fallback, type, folder, alt });
+  if (bytes.byteLength > 60 * 1024 * 1024) throw new HttpError(413, "That file is too big to copy without knowing its size. Use create_upload_link instead.");
+  return storeBytes(env, bytes, { name: fileName, type, folder, alt });
 }
 
 function b64bytes(data: string): Uint8Array {
@@ -198,7 +209,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "upload_file", title: "Save a file to Studio",
-    description: "Save an image, video, PDF or audio file into Studio's file library so it can be used in posts, emails and pages. Give either base64 data (for files you made, up to about 20 MB) or an https source_url to copy from. Returns a file id and public link.",
+    description: "Save an image, video, PDF or audio file into Studio's file library so it can be used in posts, emails and pages. Give either base64 data (small files you made, up to about 20 MB) or an https source_url to copy from (up to 500 MB; Google Drive and Dropbox share links work if they're set to anyone-with-the-link). For videos and other big files on Aisling's computer or in this chat, use create_upload_link instead. Returns a file id and public link.",
     inputSchema: { type: "object", required: ["name"], additionalProperties: false, properties: {
       name: { type: "string", description: "File name with extension, e.g. autumn-candles.png" },
       base64: { type: "string", description: "File contents, base64-encoded (a data: URL is fine)." },
@@ -221,6 +232,37 @@ const TOOLS: Tool[] = [
       }
       return { id: f.id, name: f.name, url: fileUrl(env, f.key), kind: f.kind, size_bytes: f.size, width: f.width, height: f.height, folder: f.folder };
     },
+  },
+  {
+    name: "create_upload_link", title: "Make an upload link",
+    description: "Make a one-time link for getting big files, like marketing videos, into Studio's file library. Two ways to use it: (1) give the link to Aisling to open in her browser and drag the files in (works for anything, up to 4 GB each); or (2) if you can run shell commands and have the file, upload it yourself: `curl -T video.mp4 -H 'content-type: video/mp4' <url>` for files up to 90 MB, or the parts steps returned for bigger ones. Then call check_upload_link to get the file ids to attach to a draft. Links expire (default 60 minutes).",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      folder: { type: "string", description: "Folder to put the files in, usually the brand name." },
+      note: { type: "string", description: "Short line shown on the upload page, e.g. which videos to add." },
+      max_files: { type: "integer", minimum: 1, maximum: 50, description: "Default 10." },
+      minutes: { type: "integer", minimum: 10, maximum: 1440, description: "How long the link works. Default 60." } } },
+    run: async (env, a) => {
+      const l = await createUploadLink(env, { folder: s(a.folder, 60), note: s(a.note, 300), maxFiles: a.max_files, minutes: a.minutes });
+      return {
+        upload_link_id: l.id, url: l.url, expires_at: new Date(l.expires_at).toISOString(),
+        for_aisling: "Open the link in a browser and drag the files in. Big videos go up in parts with a progress bar.",
+        for_scripts: {
+          small_files: `curl -T FILE -H "content-type: video/mp4" -H "x-filename: NAME.mp4" ${l.url}   (up to 90 MB)`,
+          big_files: [
+            `1. POST ${l.url}/start with headers content-type, x-filename and x-size (bytes) → returns {id, partSize}`,
+            `2. For each partSize chunk n = 1, 2, …: PUT ${l.url}/parts/n?file=ID with the chunk as the body → returns {partNumber, etag}`,
+            `3. POST ${l.url}/finish with JSON {"file": ID, "parts": [every {partNumber, etag}]}`,
+          ],
+        },
+        next: "Call check_upload_link with upload_link_id to get the file ids once they're in.",
+      };
+    },
+  },
+  {
+    name: "check_upload_link", title: "Check an upload link", readOnly: true,
+    description: "See which files have arrived through an upload link, with their file ids and links, so you can attach them to a draft.",
+    inputSchema: { type: "object", required: ["upload_link_id"], additionalProperties: false, properties: { upload_link_id: { type: "string" } } },
+    run: async (env, a) => uploadLinkStatus(env, s(a.upload_link_id, 40)),
   },
   {
     name: "list_files", title: "List files", readOnly: true,

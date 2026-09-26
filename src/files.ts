@@ -19,6 +19,9 @@ export interface FileRow {
 
 const ALLOWED = /^(image\/(jpeg|png|webp|gif|avif|svg\+xml)|video\/(mp4|quicktime|webm)|application\/pdf|audio\/(mpeg|mp4|wav|x-wav))$/;
 
+export const TYPE_BY_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", avif: "image/avif", svg: "image/svg+xml", pdf: "application/pdf", mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg", m4a: "audio/mp4", wav: "audio/wav" };
+export function typeFromName(name: string): string { return TYPE_BY_EXT[(name.split(".").pop() || "").toLowerCase()] || ""; }
+
 export function kindOf(type: string): string {
   if (type.startsWith("image/")) return "image";
   if (type.startsWith("video/")) return "video";
@@ -54,8 +57,10 @@ function meta(req: Request) {
 export const view = (env: Env, f: FileRow) => ({ ...f, url: fileUrl(env, f.key), upload_id: undefined });
 
 /** One-request upload (up to ~95 MB). */
-export async function uploadSmall(env: Env, req: Request): Promise<FileRow> {
+export async function uploadSmall(env: Env, req: Request, o: { folder?: string; link?: string } = {}): Promise<FileRow> {
   const m = meta(req);
+  if (o.folder !== undefined) m.folder = o.folder;
+  if (!ALLOWED.test(m.type)) m.type = typeFromName(m.name) || m.type;
   if (!ALLOWED.test(m.type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   const len = Number(req.headers.get("content-length")) || 0;
   if (!req.body || !len) throw new HttpError(400, "That file is empty.");
@@ -63,8 +68,8 @@ export async function uploadSmall(env: Env, req: Request): Promise<FileRow> {
   const key = newKey(m.name, m.type);
   const obj = await bucket(env).put(key, req.body, { httpMetadata: { contentType: m.type, cacheControl: "public, max-age=31536000, immutable" } });
   const t = now(), fid = id("f_");
-  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, width, height, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(fid, key, m.name, m.folder, m.type, kindOf(m.type), obj?.size || len, m.width, m.height, t, t).run();
+  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, width, height, upload_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(fid, key, m.name, m.folder, m.type, kindOf(m.type), obj?.size || len, m.width, m.height, o.link || null, t, t).run();
   return (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!;
 }
 
@@ -95,7 +100,7 @@ export function imageDims(b: Uint8Array): { w: number; h: number } | null {
 
 /** Save bytes Studio already has (from Claude, or fetched from a link) as a library file. */
 export async function storeBytes(env: Env, bytes: Uint8Array, o: { name: string; type: string; folder?: string; alt?: string }): Promise<FileRow> {
-  const type = o.type.toLowerCase();
+  const type = (ALLOWED.test(o.type.toLowerCase()) ? o.type : typeFromName(o.name) || o.type).toLowerCase();
   if (!ALLOWED.test(type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   if (!bytes.byteLength) throw new HttpError(400, "That file is empty.");
   const key = newKey(o.name, type);
@@ -107,17 +112,35 @@ export async function storeBytes(env: Env, bytes: Uint8Array, o: { name: string;
   return (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!;
 }
 
+/** Stream a large download straight into the library without holding it in memory. */
+export async function storeStream(env: Env, body: ReadableStream, len: number, o: { name: string; type: string; folder?: string; alt?: string; link?: string }): Promise<FileRow> {
+  const type = (ALLOWED.test(o.type) ? o.type : typeFromName(o.name) || o.type).toLowerCase();
+  if (!ALLOWED.test(type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!(len > 0) || len > MAX_SIZE) throw new HttpError(413, "That file is too big, or its size is unknown.");
+  const key = newKey(o.name, type);
+  const { readable, writable } = new FixedLengthStream(len);
+  const pipe = body.pipeTo(writable);
+  await bucket(env).put(key, readable, { httpMetadata: { contentType: type, cacheControl: "public, max-age=31536000, immutable" } });
+  await pipe;
+  const t = now(), fid = id("f_");
+  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, alt, upload_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(fid, key, o.name.slice(0, 160), (o.folder || "").slice(0, 60), type, kindOf(type), len, (o.alt || "").slice(0, 300), o.link || null, t, t).run();
+  return (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!;
+}
+
 /** Start a big upload. The browser then sends parts of PART_SIZE bytes. */
-export async function startBig(env: Env, req: Request): Promise<{ file: FileRow; partSize: number }> {
+export async function startBig(env: Env, req: Request, o: { folder?: string; link?: string } = {}): Promise<{ file: FileRow; partSize: number }> {
   const m = meta(req);
+  if (o.folder !== undefined) m.folder = o.folder;
+  if (!ALLOWED.test(m.type)) m.type = typeFromName(m.name) || m.type;
   if (!ALLOWED.test(m.type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   if (!m.size) throw new HttpError(400, "That file is empty.");
   if (m.size > MAX_SIZE) throw new HttpError(413, "That file is over 4 GB. Make it smaller first.");
   const key = newKey(m.name, m.type);
   const up = await bucket(env).createMultipartUpload(key, { httpMetadata: { contentType: m.type, cacheControl: "public, max-age=31536000, immutable" } });
   const t = now(), fid = id("f_");
-  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, width, height, status, upload_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?)`)
-    .bind(fid, key, m.name, m.folder, m.type, kindOf(m.type), m.size, m.width, m.height, up.uploadId, t, t).run();
+  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, width, height, status, upload_id, upload_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?)`)
+    .bind(fid, key, m.name, m.folder, m.type, kindOf(m.type), m.size, m.width, m.height, up.uploadId, o.link || null, t, t).run();
   return { file: (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!, partSize: PART_SIZE };
 }
 

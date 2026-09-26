@@ -18,7 +18,7 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 
 ## Claude connector
 
-Studio is a remote MCP server at `https://studio.<domain>/mcp` (Streamable HTTP, JSON responses). Sign-in is OAuth 2.1 through `@cloudflare/workers-oauth-provider` (PKCE, DCR and CIMD; tokens in the `OAUTH_KV` namespace). The approval page is `/oauth/authorize`, behind Studio's email-link sign-in. Tools (`src/mcp.ts`) only read or save drafts: nothing posts, schedules or sends.
+Studio is a remote MCP server at `https://studio.<domain>/mcp` (Streamable HTTP, JSON responses). Sign-in is OAuth 2.1 through `@cloudflare/workers-oauth-provider` (PKCE, DCR and CIMD; tokens in the `OAUTH_KV` namespace). The approval page is `/oauth/authorize`, behind Studio's email-link sign-in. Tools (`src/mcp.ts`) only read or save drafts: nothing posts, schedules or sends. Big files (videos) come in through one-time upload links at `/up/<secret>` (`src/uploads.ts`): a drag-and-drop page, or PUT / parts for scripts.
 
 ## Deploying
 

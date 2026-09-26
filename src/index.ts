@@ -7,6 +7,7 @@ import { ALTERS, SCHEMA } from "./schema";
 import { handleAuth } from "./login";
 import { serveFile } from "./files";
 import { authorize, studioProvider } from "./oauth";
+import { handleUploadLink } from "./uploads";
 
 let schemaReady: Promise<unknown> | null = null;
 async function applySchema(env: Env) {
@@ -26,6 +27,7 @@ async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
   if (url.pathname === "/__proof/site.css") return serveStatic(req, env, "/site.css");
   if (url.pathname.startsWith("/__proof/fonts/")) return serveStatic(req, env, url.pathname.replace("/__proof", ""));
   if (url.pathname === "/oauth/authorize") return authorize(req, env as any);
+  if (url.pathname.startsWith("/up/")) return handleUploadLink(req, env, url.pathname);
   if (url.pathname === "/login" || url.pathname.startsWith("/auth/")) {
     if (req.method === "POST") {
       const origin = req.headers.get("origin");

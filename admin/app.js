@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270016";
+var VERSION = "202609270034";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };

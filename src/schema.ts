@@ -36,6 +36,7 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS links ( id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, url TEXT NOT NULL, source_type TEXT NOT NULL DEFAULT 'manual', source_id TEXT, platform TEXT, profile_id TEXT, original TEXT NOT NULL DEFAULT '', clicks INTEGER NOT NULL DEFAULT 0, last_click_at INTEGER, created_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_type, source_id)",
  "CREATE TABLE IF NOT EXISTS link_days ( link_id TEXT NOT NULL, day TEXT NOT NULL, clicks INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (link_id, day) )",
+ "CREATE TABLE IF NOT EXISTS upload_links ( hash TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, folder TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', max_files INTEGER NOT NULL DEFAULT 10, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -48,4 +49,6 @@ export const ALTERS: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_contacts_ref ON contacts(ref_link)",
  "ALTER TABLE social_posts ADD COLUMN metrics TEXT",
  "ALTER TABLE social_posts ADD COLUMN metrics_at INTEGER",
+ "ALTER TABLE files ADD COLUMN upload_link TEXT",
+ "CREATE INDEX IF NOT EXISTS idx_files_link ON files(upload_link)",
 ];
