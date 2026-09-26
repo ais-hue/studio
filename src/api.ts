@@ -8,7 +8,7 @@ import { VERSION } from "./version";
 import { linkStats } from "./links";
 import { performance, syncMetrics } from "./performance";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
-import { PLATFORMS, SocialPost, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
+import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -667,6 +667,14 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const name = str(d.name, 60);
       if (!name) throw new HttpError(400, "Give the brand a name.");
       return json({ brand: await createProfile(env, name) }, 201);
+    }
+    if (s1 === "brands" && s2 && !s3 && m === "PATCH") {
+      const d = await body(req);
+      const name = str(d.name, 60);
+      if (!name) throw new HttpError(400, "Give the brand a name.");
+      const brands = await listProfiles(env);
+      if (brands.some((b) => b._id !== s2 && b.name.toLowerCase() === name.toLowerCase())) throw new HttpError(409, "Another brand already has that name.");
+      return json({ brand: await renameProfile(env, s2, name) });
     }
     if (s1 === "brands" && s2 && s3 === "accounts" && m === "GET") return json({ accounts: await listAccounts(env, s2) });
     if (s1 === "brands" && s2 && s3 === "connect" && m === "POST") {

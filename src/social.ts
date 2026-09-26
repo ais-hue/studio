@@ -75,10 +75,16 @@ const mockAccounts = new Map<string, any>([
 
 /* ---------- brands and accounts ---------- */
 export async function listProfiles(env: Env): Promise<Array<{ _id: string; name: string }>> {
-  if (await mock(env)) return MOCK_PROFILES;
-  const d = await call(env, "GET", "/profiles?limit=100");
-  const list = Array.isArray(d) ? d : d.profiles || d.data || [];
-  return list.map((p: any) => ({ _id: String(p._id || p.id), name: String(p.name || "Untitled") }));
+  let out: Array<{ _id: string; name: string }>;
+  if (await mock(env)) out = MOCK_PROFILES.map((p) => ({ ...p }));
+  else {
+    const d = await call(env, "GET", "/profiles?limit=100");
+    const list = Array.isArray(d) ? d : d.profiles || d.data || [];
+    out = list.map((p: any) => ({ _id: String(p._id || p.id), name: String(p.name || "Untitled") }));
+  }
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'brandname:%'").all<{ key: string; value: string }>();
+  for (const r of results) { const b = out.find((x) => x._id === r.key.slice(10)); if (b) b.name = r.value; }
+  return out;
 }
 
 export async function createProfile(env: Env, name: string): Promise<{ _id: string; name: string }> {
@@ -86,6 +92,16 @@ export async function createProfile(env: Env, name: string): Promise<{ _id: stri
   const d = await call(env, "POST", "/profiles", { name });
   const p = d.profile || d;
   return { _id: String(p._id || p.id), name: String(p.name || name) };
+}
+
+/** Rename a brand. Studio keeps the name itself; Zernio is updated too when it allows it. */
+export async function renameProfile(env: Env, profileId: string, name: string): Promise<{ _id: string; name: string }> {
+  await env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind("brandname:" + profileId, name).run();
+  if (!(await mock(env))) {
+    try { await call(env, "PATCH", `/profiles/${encodeURIComponent(profileId)}`, { name }); }
+    catch (e) { console.log("Zernio profile rename not applied:", (e as Error).message); }
+  }
+  return { _id: profileId, name };
 }
 
 export async function listAccounts(env: Env, profileId: string): Promise<Array<{ _id: string; platform: string; username: string; displayName: string; picture: string; active: boolean }>> {

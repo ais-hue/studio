@@ -465,3 +465,4 @@ h3.mini{margin:0;font-size:13px;font-weight:600;display:flex;gap:10px;align-item
 .hc.none{background:var(--soft);color:var(--t3)}
 .suggest{margin:0;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .plat .pu{white-space:normal}
+.tabs #renameBrand{margin-left:auto;color:var(--t3);font-size:12.5px;font-weight:400}.tabs #renameBrand:hover{color:var(--t1)}

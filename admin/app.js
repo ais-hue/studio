@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270034";
+var VERSION = "202609270041";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1181,7 +1181,7 @@ function socialView(brandParam){
         var byPlat={}; accounts.forEach(function(a){ byPlat[a.platform]=a });
         var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>');
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
-        html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
+        html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
         html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. First 2 free, then $6/month each on Zernio.</span></h2><div class="plats">'+
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
@@ -1203,6 +1203,12 @@ function socialView(brandParam){
           var tc=0, ts=0; d.platforms.forEach(function(x){ tc+=x.clicks; ts+=x.signups });
           h.innerHTML='<section class="panel"><h2 class="sec">Last 30 days <span class="hint">'+tc+' clicks · '+ts+' sign-ups from '+esc(brand.name)+' posts</span></h2><div class="plats">'+d.platforms.map(function(x){ return '<div class="plat"><span class="pn">'+esc(platName(x.platform))+'</span><span class="pu">'+x.clicks+' click'+(x.clicks===1?"":"s")+' · '+x.signups+' sign-up'+(x.signups===1?"":"s")+'</span></div>' }).join("")+'</div></section>' }).catch(function(){});
         $("#newPost").onclick=function(){ this.disabled=true; api("POST","social/posts",{profile_id:brand._id, targets:accounts.map(function(a){ return {platform:a.platform, accountId:a._id} })}).then(function(r){ go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
+        $("#renameBrand").onclick=function(){
+          $("#brandHost").innerHTML='<form class="sheet" id="rbForm"><div class="field"><label for="rbName">Rename '+esc(brand.name)+'</label><input type="text" id="rbName" required maxlength="60" value="'+esc(brand.name)+'"></div><div class="actions"><button class="btn primary sm" type="submit">Save name</button><button class="btn ghost sm" type="button" id="rbCancel">Cancel</button></div></form>';
+          var i=$("#rbName"); i.focus(); i.select(); $("#rbCancel").onclick=function(){ $("#brandHost").innerHTML="" };
+          $("#rbForm").onsubmit=function(e){ e.preventDefault(); var b=this.querySelector("[type=submit]"); b.disabled=true;
+            api("PATCH","social/brands/"+brand._id,{name:i.value}).then(function(r){ toast("Renamed to "+r.brand.name); route() }).catch(function(err){ b.disabled=false; toast(err.message,true) }) };
+        };
         $("#addBrand").onclick=function(){
           $("#brandHost").innerHTML='<form class="sheet" id="brandForm"><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Seek"></div><div class="actions"><button class="btn primary sm" type="submit">Create brand</button><button class="btn ghost sm" type="button" id="bCancel">Cancel</button></div></form>';
           $("#bName").focus(); $("#bCancel").onclick=function(){ $("#brandHost").innerHTML="" };
