@@ -434,3 +434,18 @@ fieldset.xtra legend{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-
 .dd[aria-pressed="true"]{background:var(--t1);border-color:var(--t1);color:var(--bg);font-weight:600}
 input[type=time]{background:var(--field);border:1px solid var(--line2);padding:6px 10px;font-size:13.5px;color:var(--t1)}
 .calday.today .dn .dw{color:inherit}
+
+/* ---------- optimising ---------- */
+.captabs{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line);gap:18px;margin-bottom:8px}
+.captabs button{border:0;background:none;padding:6px 0;cursor:pointer;font-size:13px;color:var(--t2);border-bottom:2px solid transparent;margin-bottom:-1px}
+.captabs [aria-selected="true"]{color:var(--t1);border-bottom-color:var(--coral);font-weight:500}
+.figacts{display:flex;gap:2px;margin:0 2px 2px}
+.croptools{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding:12px 18px}
+.croptools .seg button{padding:5px 10px}
+.cropstage{display:grid;place-items:center;padding:12px 18px 18px;overflow:auto;min-height:200px}
+.cropimg{position:relative;background-size:100% 100%;background-repeat:no-repeat;touch-action:none}
+.cropframe{position:absolute;box-shadow:0 0 0 9999px rgba(11,18,32,.55);outline:2px solid #fff;cursor:move;touch-action:none}
+.cropframe:focus-visible{outline:2px solid var(--coral)}
+.cropimg{overflow:hidden}
+input[type=range]{accent-color:var(--coral)}
+.figacts{flex-wrap:wrap}.figacts .btn{padding:4px 6px}

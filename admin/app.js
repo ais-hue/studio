@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609262354";
+var VERSION = "202609270004";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -511,6 +511,7 @@ function contactsView(listParam){
           '<div class="fieldrow"><div class="field"><label for="cdName">Name</label><input type="text" id="cdName" maxlength="80" value="'+esc(c.name)+'"></div>'+
           '<div class="field"><label for="cdStatus">Status</label><select id="cdStatus">'+[["subscribed","Subscribed"],["unsubscribed","Unsubscribed"],["pending","Waiting to confirm"],["bounced","Bounced"],["complained","Marked as spam"]].map(function(s){ return '<option value="'+s[0]+'"'+(c.status===s[0]?" selected":"")+'>'+s[1]+'</option>' }).join("")+'</select></div></div>'+
           listChecks(d.lists)+
+          (d.ref&&d.ref.source_type==="social" ? '<p class="hint">Brought in by a tracked link in <a href="#/social/p/'+esc(d.ref.source_id)+'">a '+esc(platName(d.ref.platform))+' post</a>.</p>' : '')+
           '<p class="hint">Came from '+esc(c.source||"—")+' on '+fmtDate(c.created_at,true)+'. '+(c.consent_at ? 'Agreed to emails on '+fmtDate(c.consent_at,true)+': “'+esc(c.consent_text)+'”' : 'Added by hand or import, no signup consent recorded.')+'</p>'+
           (c.status==="bounced" ? '<div class="notice danger"><p>Emails to this address bounced, so Studio stopped sending to it. Only switch it back if you know the address works now.</p></div>' : '')+
           (c.status==="complained" ? '<div class="notice danger"><p>They marked one of your emails as spam, so Studio stopped emailing them. Leave this as it is unless they ask to hear from you again.</p></div>' : '')+
@@ -1054,6 +1055,67 @@ function filesView(folderParam){
   });
 }
 
+/* ============ cropping ============ */
+var RATIOS=[["1:1",1,"Square","Most feeds"],["4:5",0.8,"Portrait","Instagram feed"],["9:16",0.5625,"Tall","TikTok, Reels, Stories"],["2:3",0.6667,"Pin","Pinterest"],["1.91:1",1.91,"Wide","LinkedIn, X, Facebook links"]];
+function bestRatio(platforms){
+  if(platforms.indexOf("tiktok")>-1) return "9:16";
+  if(platforms.indexOf("pinterest")>-1 && platforms.length===1) return "2:3";
+  if(platforms.indexOf("instagram")>-1) return "4:5";
+  if(platforms.length && platforms.every(function(p){ return ["linkedin","twitter","facebook","bluesky","threads"].indexOf(p)>-1 })) return "1.91:1";
+  return "1:1";
+}
+/** Crop an image from the library to a ratio. Resolves with the new library file, or null. */
+function cropImage(src, name, suggest, folder){
+  return new Promise(function(resolve){
+    var img=new Image(); img.crossOrigin="anonymous";
+    var ov=document.createElement("div"); ov.className="modal"; ov.setAttribute("role","dialog"); ov.setAttribute("aria-modal","true"); ov.setAttribute("aria-label","Crop image");
+    ov.innerHTML='<div class="modalbox"><div class="modalhead"><b>Crop</b><button class="btn sm ghost" type="button" data-x>Cancel</button></div>'+
+      '<div class="croptools"><div class="seg" role="group" aria-label="Shape">'+RATIOS.map(function(r){ return '<button type="button" data-r="'+r[0]+'" aria-pressed="'+(r[0]===suggest)+'" title="'+esc(r[3])+'">'+r[2]+' '+r[0]+'</button>' }).join("")+'</div><span class="hint" id="crHint"></span></div>'+
+      '<div class="cropstage" id="crStage"><div class="loading">Loading image…</div></div>'+
+      '<div class="modalfoot"><span class="hint">Drag the frame to choose what’s in. Use the slider to zoom.</span><span class="actions"><input type="range" id="crZoom" min="40" max="100" value="100" aria-label="Frame size"><button class="btn primary" type="button" id="crGo" disabled>Save cropped copy</button></span></div></div>';
+    document.body.appendChild(ov);
+    var close=function(v){ document.removeEventListener("keydown",k); ov.remove(); resolve(v) }, k=function(e){ if(e.key==="Escape") close(null) };
+    document.addEventListener("keydown",k); ov.querySelector("[data-x]").onclick=function(){ close(null) };
+    var ratio=RATIOS.filter(function(r){return r[0]===suggest})[0]||RATIOS[0], box={x:0,y:0,w:0,h:0}, scale=1, stage=$("#crStage",ov);
+    function fit(){
+      var W=img.naturalWidth, H=img.naturalHeight, z=Number($("#crZoom",ov).value)/100;
+      var w=W, h=w/ratio[1]; if(h>H){ h=H; w=h*ratio[1] } w*=z; h*=z;
+      var cx=box.w?box.x+box.w/2:W/2, cy=box.h?box.y+box.h/2:H/2;
+      box={w:w,h:h,x:Math.min(Math.max(0,cx-w/2),W-w),y:Math.min(Math.max(0,cy-h/2),H-h)}; draw();
+      $("#crHint",ov).textContent=ratio[3]+" · "+Math.round(w)+"×"+Math.round(h)+"px"+(w<1080&&ratio[1]<=1?" (small: may look soft)":"");
+    }
+    function draw(){ var f=$(".cropframe",stage); f.style.left=box.x*scale+"px"; f.style.top=box.y*scale+"px"; f.style.width=box.w*scale+"px"; f.style.height=box.h*scale+"px" }
+    img.onload=function(){
+      var maxW=Math.min(800, window.innerWidth-64), maxH=Math.min(520, window.innerHeight-260);
+      scale=Math.min(maxW/img.naturalWidth, maxH/img.naturalHeight, 1);
+      stage.innerHTML='<div class="cropimg" style="width:'+Math.round(img.naturalWidth*scale)+'px;height:'+Math.round(img.naturalHeight*scale)+'px;background-image:url(\''+src.replace(/'/g,"%27")+'\')"><div class="cropframe" tabindex="0" aria-label="Crop frame. Use arrow keys to move."></div></div>';
+      fit(); $("#crGo",ov).disabled=false;
+      var fr=$(".cropframe",stage), start=null;
+      fr.addEventListener("pointerdown",function(e){ start={x:e.clientX,y:e.clientY,bx:box.x,by:box.y}; fr.setPointerCapture(e.pointerId) });
+      fr.addEventListener("pointermove",function(e){ if(!start) return; box.x=Math.min(Math.max(0,start.bx+(e.clientX-start.x)/scale),img.naturalWidth-box.w); box.y=Math.min(Math.max(0,start.by+(e.clientY-start.y)/scale),img.naturalHeight-box.h); draw() });
+      fr.addEventListener("pointerup",function(){ start=null });
+      fr.addEventListener("keydown",function(e){ var st=20/scale, mv={ArrowLeft:[-st,0],ArrowRight:[st,0],ArrowUp:[0,-st],ArrowDown:[0,st]}[e.key]; if(!mv) return; e.preventDefault();
+        box.x=Math.min(Math.max(0,box.x+mv[0]),img.naturalWidth-box.w); box.y=Math.min(Math.max(0,box.y+mv[1]),img.naturalHeight-box.h); draw() });
+    };
+    img.onerror=function(){ stage.innerHTML='<div class="notice danger"><p>That image couldn’t be opened for cropping.</p></div>' };
+    img.src=src;
+    $$("[data-r]",ov).forEach(function(b){ b.onclick=function(){ ratio=RATIOS.filter(function(r){return r[0]===b.dataset.r})[0]; $$("[data-r]",ov).forEach(function(x){ x.setAttribute("aria-pressed",String(x===b)) }); box={x:0,y:0,w:0,h:0}; if(img.naturalWidth) fit() } });
+    $("#crZoom",ov).oninput=function(){ if(img.naturalWidth) fit() };
+    $("#crGo",ov).onclick=function(){
+      var b=this; b.disabled=true; b.textContent="Saving…";
+      var outW=Math.min(Math.round(box.w), ratio[1]>=1?2160:1440), outH=Math.round(outW/ratio[1]);
+      var c=document.createElement("canvas"); c.width=outW; c.height=outH;
+      var ctx=c.getContext("2d"); ctx.imageSmoothingQuality="high"; ctx.drawImage(img, box.x, box.y, box.w, box.h, 0, 0, outW, outH);
+      var png=/\.png$/i.test(name);
+      c.toBlob(function(blob){
+        if(!blob){ toast("That image couldn’t be cropped.",true); b.disabled=false; b.textContent="Save cropped copy"; return }
+        var base=name.replace(/\.[a-z0-9]+$/i,""), file=new File([blob], base+"-"+ratio[0].replace(":","x")+(png?".png":".jpg"), {type:png?"image/png":"image/jpeg"});
+        uploadToLibrary(file, folder||"").then(function(f){ toast("Cropped copy saved to your files"); close(f) }).catch(function(e){ toast(e.message,true); b.disabled=false; b.textContent="Save cropped copy" });
+      }, png?"image/png":"image/jpeg", 0.9);
+    };
+  });
+}
+
 /* ============ social ============ */
 var PLAT_ORDER = ["instagram","tiktok","linkedin","threads","bluesky","twitter","pinterest","facebook"];
 var SOCIAL_STATUS = { draft:"Draft", scheduled:"Scheduled", publishing:"Posting", published:"Posted", partial:"Partly posted", failed:"Failed" };
@@ -1095,7 +1157,7 @@ function socialView(brandParam){
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
               (a ? '<span class="pu">@'+esc(a.username)+(a.active?'':' · needs reconnecting')+'</span><button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
-                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="slotsHost"></div>';
+                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="resHost"></div><div id="slotsHost"></div>';
         var groups=[["Needs attention",function(p){return p.status==="failed"||p.status==="partial"}],["Coming up",function(p){return p.status==="scheduled"||p.status==="publishing"}],["Drafts",function(p){return p.status==="draft"}],["Posted",function(p){return p.status==="published"}]];
         if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
         groups.forEach(function(g){
@@ -1107,6 +1169,9 @@ function socialView(brandParam){
         });
         v.innerHTML=html;
         slotsPanel($("#slotsHost"), brand);
+        api("GET","links/stats?brand="+encodeURIComponent(brand._id)+"&days=30").then(function(d){ if(!d.platforms.length) return; var h=$("#resHost"); if(!h) return;
+          var tc=0, ts=0; d.platforms.forEach(function(x){ tc+=x.clicks; ts+=x.signups });
+          h.innerHTML='<section class="panel"><h2 class="sec">Last 30 days <span class="hint">'+tc+' clicks · '+ts+' sign-ups from '+esc(brand.name)+' posts</span></h2><div class="plats">'+d.platforms.map(function(x){ return '<div class="plat"><span class="pn">'+esc(platName(x.platform))+'</span><span class="pu">'+x.clicks+' click'+(x.clicks===1?"":"s")+' · '+x.signups+' sign-up'+(x.signups===1?"":"s")+'</span></div>' }).join("")+'</div></section>' }).catch(function(){});
         $("#newPost").onclick=function(){ this.disabled=true; api("POST","social/posts",{profile_id:brand._id, targets:accounts.map(function(a){ return {platform:a.platform, accountId:a._id} })}).then(function(r){ go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
         $("#addBrand").onclick=function(){
           $("#brandHost").innerHTML='<form class="sheet" id="brandForm"><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Seek"></div><div class="actions"><button class="btn primary sm" type="submit">Create brand</button><button class="btn ghost sm" type="button" id="bCancel">Cancel</button></div></form>';
@@ -1145,11 +1210,15 @@ function socialPostView(pid){
         if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
         html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
           return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
+        if(p.status==="published"||p.status==="partial") html+='<section class="panel"><h2 class="sec">Link results <span class="hint">clicks on tracked links, and new sign-ups they brought</span></h2><div id="spLinks"><div class="loading" style="padding:14px 18px">Loading…</div></div></section>';
         if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
         html+='</div><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
         v.innerHTML=html;
         renderPreview();
         var us=$("#spUnsched"); if(us) us.onclick=function(){ api("POST","social/posts/"+pid+"/unschedule").then(function(){ toast("Back to draft"); route() }).catch(function(e){ toast(e.message,true) }) };
+        if($("#spLinks")) api("GET","links/stats?post="+encodeURIComponent(pid)+"&days=365").then(function(d){ var h=$("#spLinks"); if(!h) return;
+          h.innerHTML = d.platforms.length ? '<div class="tablewrap"><table><thead><tr><th>Platform</th><th class="r">Clicks</th><th class="r">Sign-ups</th></tr></thead><tbody>'+d.platforms.map(function(x){ return '<tr><td>'+esc(platName(x.platform))+'</td><td class="r mono">'+x.clicks+'</td><td class="r mono">'+x.signups+'</td></tr>' }).join("")+'</tbody></table></div>'
+            : '<div class="empty">No tracked links in this post.</div>' }).catch(function(){});
         var mv=$("#spMoveGo"); if(mv) mv.onclick=function(){ var val=$("#spMove").value; if(!val){ toast("Pick a new date and time first.",true); return }
           api("POST","social/posts/"+pid+"/reschedule",{at:new Date(val).getTime()}).then(function(){ toast("Moved"); route() }).catch(function(e){ toast(e.message,true) }) };
         var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Trying again"); route() }).catch(function(e){ toast(e.message,true); rt.disabled=false }) };
@@ -1161,6 +1230,8 @@ function socialPostView(pid){
         '<div class="field"><span class="label">Post to</span><div class="picks" role="group" aria-label="Accounts">'+
           (accounts.length ? accounts.map(function(a){ return '<button type="button" data-pick="'+esc(a.platform)+'" aria-pressed="'+(sel().indexOf(a.platform)>-1)+'">'+esc(platName(a.platform))+'</button>' }).join("") : '<span class="hint">No accounts connected for '+esc(brand.name)+'. <a href="#/social/b/'+esc(brand._id)+'">Connect one</a>.</span>')+'</div></div>'+
         '<div class="field"><label for="spText">Caption</label><textarea id="spText" class="code" style="min-height:200px" maxlength="70000">'+esc(p.content)+'</textarea><div class="counts" id="spCounts"></div></div>'+
+        '<div class="field"><div class="actions" style="justify-content:space-between"><span class="label">Per platform</span><button class="btn sm" type="button" id="spTweak">Tweak for each platform</button></div><div id="spCaps"></div></div>'+
+        '<div class="field"><label class="check"><input type="checkbox" id="spTrack"'+(p.options.track===false?"":" checked")+'> Track links</label><span class="hint">Links become go.'+esc(S.me.root)+'/l/… so Studio can count clicks and sign-ups from each platform.</span></div>'+
         '<div class="field"><span class="label">Pictures and video</span><div class="media" id="spMedia"></div>'+
           '<div class="actions"><label class="btn sm" style="cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Upload</label>'+(S.me.files?'<button class="btn sm" type="button" id="spLib">From your files</button>':'')+'</div><span class="hint">'+(S.me.files?'Uploads are saved to your '+esc(brand.name)+' files too.':'Up to 100 MB each.')+' Instagram, TikTok and Pinterest need at least one.</span></div>'+
         '<div id="spExtras" class="stack" style="gap:14px"></div>'+
@@ -1171,9 +1242,24 @@ function socialPostView(pid){
       v.innerHTML=html;
 
       var save=saver($("#spSave"), function(x){ return api("PATCH","social/posts/"+pid,x).then(function(res){ p.problems=res.post.problems; showProblems() }) });
+      p.options.captions=p.options.captions||{};
+      var capTab=null, showCaps=Object.keys(p.options.captions).some(function(k){return p.options.captions[k]});
       function counts(){
-        var n=$("#spText").value.length;
-        $("#spCounts").innerHTML=sel().map(function(pl){ var lim=S.social.platforms[pl].limit, over=n>lim; return '<span class="'+(over?"over":"")+'">'+esc(platName(pl))+' '+n.toLocaleString()+'/'+lim.toLocaleString()+'</span>' }).join("");
+        $("#spCounts").innerHTML=sel().map(function(pl){ var own=p.options.captions[pl], n=(own||$("#spText").value).length, lim=S.social.platforms[pl].limit, over=n>lim; return '<span class="'+(over?"over":"")+'">'+esc(platName(pl))+(own?"*":"")+' '+n.toLocaleString()+'/'+lim.toLocaleString()+'</span>' }).join("")+(Object.keys(p.options.captions).some(function(k){return p.options.captions[k]&&sel().indexOf(k)>-1})?'<span>* own caption</span>':'');
+      }
+      function caps(){
+        var host=$("#spCaps"), list=sel(); if(!host) return;
+        $("#spTweak").textContent=showCaps?"Hide":"Tweak for each platform";
+        if(!showCaps||!list.length){ host.innerHTML=showCaps?'<p class="hint">Pick some accounts first.</p>':''; return }
+        if(list.indexOf(capTab)<0) capTab=list[0];
+        var own=p.options.captions[capTab]||"";
+        host.innerHTML='<div class="captabs" role="tablist">'+list.map(function(pl){ return '<button type="button" role="tab" data-ct="'+pl+'" aria-selected="'+(pl===capTab)+'">'+esc(platName(pl))+(p.options.captions[pl]?" *":"")+'</button>' }).join("")+'</div>'+
+          '<textarea id="spCap" class="code" style="min-height:130px" placeholder="Same as the main caption. Type here to give '+esc(platName(capTab))+' its own version.">'+esc(own)+'</textarea>'+
+          '<div class="actions"><button class="btn sm" type="button" id="spCapCopy">Start from the main caption</button>'+(own?'<button class="btn sm ghost" type="button" id="spCapClear">Use the main caption</button>':'')+'</div>';
+        $$("[data-ct]",host).forEach(function(b){ b.onclick=function(){ capTab=b.dataset.ct; caps(); renderPreview() } });
+        var ta=$("#spCap"); ta.oninput=function(){ p.options.captions[capTab]=ta.value; save({options:p.options}); counts(); renderPreview(); var tab=$('[data-ct="'+capTab+'"]',host); if(tab) tab.textContent=platName(capTab)+(ta.value?" *":"") };
+        $("#spCapCopy").onclick=function(){ ta.value=$("#spText").value; ta.dispatchEvent(new Event("input")); ta.focus() };
+        var cl=$("#spCapClear"); if(cl) cl.onclick=function(){ delete p.options.captions[capTab]; save({options:p.options}); save.now(); caps(); counts(); renderPreview() };
       }
       var nextAt=null;
       function showProblems(){ var ul=$("#spProbs"); if(!ul) return; ul.innerHTML=(p.problems||[]).map(function(x){ return '<li>'+esc(x)+'</li>' }).join(""); var bad=!!(p.problems&&p.problems.length); $("#spNow").disabled=$("#spSched").disabled=bad; $("#spQueue").disabled=bad||!nextAt }
@@ -1181,7 +1267,9 @@ function socialPostView(pid){
         if(nextAt){ q.textContent="Add to queue: "+fmtDate(nextAt,true); h.textContent="" } else { h.innerHTML='Set <a href="#/social/b/'+esc(brand._id)+'">posting times</a> for '+esc(brand.name)+' to use the queue.' }
         showProblems() }).catch(function(){});
       function mediaList(){
-        $("#spMedia").innerHTML=p.media.map(function(m,i){ return '<figure>'+(m.type==="video"?'<video src="'+esc(m.url)+'" muted playsinline preload="metadata"></video>':'<img src="'+esc(m.url)+'" alt="">')+'<figcaption>'+esc(m.name||m.type)+'</figcaption><button type="button" class="btn sm ghost" data-rm="'+i+'" aria-label="Remove '+esc(m.name||"file")+'">Remove</button></figure>' }).join("");
+        $("#spMedia").innerHTML=p.media.map(function(m,i){ return '<figure>'+(m.type==="video"?'<video src="'+esc(m.url)+'" muted playsinline preload="metadata"></video>':'<img src="'+esc(m.url)+'" alt="">')+'<figcaption>'+esc(m.name||m.type)+'</figcaption><span class="figacts">'+(m.type==="image"&&S.me.files?'<button type="button" class="btn sm ghost" data-crop="'+i+'" aria-label="Crop '+esc(m.name||"image")+'">Crop</button>':'')+'<button type="button" class="btn sm ghost" data-rm="'+i+'" aria-label="Remove '+esc(m.name||"file")+'">Remove</button></span></figure>' }).join("");
+        $$("[data-crop]").forEach(function(b){ b.onclick=function(){ var i=Number(b.dataset.crop), m=p.media[i];
+          cropImage(m.url, m.name||"image.jpg", bestRatio(sel()), brand.name).then(function(f){ if(!f) return; p.media[i]={url:f.url, type:"image", name:f.name}; mediaList(); save({media:p.media}); save.now(); renderPreview() }) } });
         $$("[data-rm]").forEach(function(b){ b.onclick=function(){ p.media.splice(Number(b.dataset.rm),1); mediaList(); save({media:p.media}); save.now(); renderPreview() } });
       }
       function extras(){
@@ -1224,9 +1312,11 @@ function socialPostView(pid){
       $$("[data-pick]").forEach(function(b){ b.onclick=function(){
         var pl=b.dataset.pick, on=b.getAttribute("aria-pressed")!=="true"; b.setAttribute("aria-pressed",String(on));
         p.targets = on ? p.targets.concat([{platform:pl, accountId:acctFor(pl)._id}]) : p.targets.filter(function(t){return t.platform!==pl});
-        save({targets:p.targets}); save.now(); counts(); extras(); renderPreview();
+        save({targets:p.targets}); save.now(); counts(); caps(); extras(); renderPreview();
       } });
       var lib=$("#spLib"); if(lib) lib.onclick=function(){ pickFromLibrary({multiple:true, folder:brand.name}).then(function(fs){ fs.forEach(function(nf){ if(nf.kind!=="image"&&nf.kind!=="video") return; p.media.push({url:nf.url, type:nf.kind==="video"?"video":(nf.type==="image/gif"?"gif":"image"), name:nf.name}) }); if(fs.length){ mediaList(); save({media:p.media}); save.now(); extras(); renderPreview() } }) };
+      $("#spTweak").onclick=function(){ showCaps=!showCaps; caps() };
+      $("#spTrack").onchange=function(){ p.options.track=this.checked; save({options:p.options}); save.now() };
       $("#spText").oninput=function(){ p.content=this.value; save({content:this.value}); counts(); renderPreview() };
       $("#spFile").onchange=function(){
         var files=Array.prototype.slice.call(this.files); this.value="";
@@ -1253,12 +1343,12 @@ function socialPostView(pid){
       $("#spSched").onclick=function(){ save.now(); var val=$("#spAt").value; if(!val){ toast("Pick a date and time first.",true); return }
         var at=new Date(val).getTime(); confirmBox("Post to "+esc(where())+" on "+esc(fmtDate(at,true))+"?", "Schedule", function(){
         setTimeout(function(){ api("POST","social/posts/"+pid+"/publish",{at:at}).then(function(){ toast("Scheduled"); route() }).catch(function(e){ toast(e.message,true); $("#spSend").innerHTML="" }) },400) }) };
-      mediaList(); counts(); extras(); showProblems(); renderPreview(); common();
+      mediaList(); counts(); caps(); extras(); showProblems(); renderPreview(); common();
 
       function common(){}
       function renderPreview(){
         var host=$("#spPrev"); if(!host) return;
-        var text=(editable?$("#spText").value:p.content)||"";
+        var text=(editable?(showCaps&&capTab&&p.options.captions[capTab])||$("#spText").value:p.content)||"";
         var m=p.media, grid = m.length ? '<div class="pgrid n'+Math.min(m.length,4)+'">'+m.slice(0,4).map(function(x){ return x.type==="video"?'<video src="'+esc(x.url)+'" muted playsinline controls preload="metadata"></video>':'<img src="'+esc(x.url)+'" alt="">' }).join("")+'</div>' : '';
         host.innerHTML='<div class="pcard"><div class="phead"><span class="pav">'+esc((brand.name||"?").slice(0,1))+'</span><span><b>'+esc(brand.name)+'</b><small>'+esc(where()||"Pick where it goes")+'</small></span></div>'+
           (text?'<p class="ptext">'+esc(text)+'</p>':'')+grid+(m.length>4?'<p class="hint" style="margin:8px 14px">+'+(m.length-4)+' more</p>':'')+'</div>';
@@ -1342,6 +1432,6 @@ function settingsView(){
 }
 
 /* ============ start ============ */
-api("GET","me").then(function(me){ S.me=me; $("#rootDomain").textContent=me.root; $("#meEmail").textContent=me.dev?"local test copy":me.email; route(); refreshNav() })
+api("GET","me").then(function(me){ S.me=me; loadSocialMeta().catch(function(){}); $("#rootDomain").textContent=me.root; $("#meEmail").textContent=me.dev?"local test copy":me.email; route(); refreshNav() })
   .catch(function(e){ $("#view").innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
 })();

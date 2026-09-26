@@ -1,4 +1,5 @@
-import { Env, accentOf, esc, getSettings, id, markdown, now, plainText } from "./util";
+import { Env, accentOf, esc, getSettings, id, markdown, now, plainText, slugify } from "./util";
+import { tagUrl } from "./links";
 import { runSequences } from "./automation";
 import { syncSocial } from "./social";
 import { cleanUploads } from "./files";
@@ -24,7 +25,7 @@ function fill(s: string, vars: Record<string, string>): string {
 export function renderEmail(
   env: Env, settings: Record<string, string>,
   opts: { subject: string; preheader?: string; body: string; accent?: string; siteName?: string;
-          name?: string; email: string; sendId?: string; token?: string; test?: boolean },
+          name?: string; email: string; sendId?: string; token?: string; test?: boolean; utmCampaign?: string },
 ): Rendered {
   const go = `https://go.${env.ROOT_DOMAIN}`;
   const vars = { name: (opts.name || "").split(" ")[0], email: opts.email };
@@ -42,8 +43,12 @@ export function renderEmail(
     .replace(/<a href="/g, `<a style="color:${accent};" href="`)
     .replace(/<img src="/g, `<img style="display:block;width:100%;max-width:544px;height:auto;border:0;margin:0 0 16px;" width="544" src="`);
   if (opts.sendId && !opts.test) {
-    body = body.replace(/href="(https?:\/\/[^"]+)"/g, (_m, u) =>
-      `href="${go}/c/${opts.sendId}?u=${encodeURIComponent(u.replace(/&amp;/g, "&"))}"`);
+    const campaign = slugify(opts.utmCampaign || "", 40);
+    body = body.replace(/href="(https?:\/\/[^"]+)"/g, (_m, u) => {
+      let dest = u.replace(/&amp;/g, "&");
+      if (campaign && !dest.startsWith(go)) dest = tagUrl(env, dest, { utm_source: "studio", utm_medium: "email", utm_campaign: campaign });
+      return `href="${go}/c/${opts.sendId}?u=${encodeURIComponent(dest)}"`;
+    });
   }
   const unsub = opts.token ? `${go}/u/${opts.token}` : `${go}/u/preview`;
   const addr = settings.postal_address ? esc(settings.postal_address) : "";
@@ -131,7 +136,7 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
   const settings = await getSettings(env);
   const campaigns = new Map<string, (Campaign & { accent?: string; siteName?: string }) | null>();
   const lists = new Map<string, { welcome_subject: string; welcome_body: string; accent?: string; siteName?: string } | null>();
-  const steps = new Map<string, { subject: string; preheader: string; body: string; accent?: string; siteName?: string } | null>();
+  const steps = new Map<string, { subject: string; preheader: string; body: string; accent?: string; siteName?: string; seqName?: string } | null>();
   const skip: string[] = [];
   const out: Array<{ row: SendRow; msg: Record<string, unknown> }> = [];
 
@@ -144,7 +149,7 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
       }
       const c = campaigns.get(row.campaign_id);
       if (!c) { skip.push(row.id); continue; }
-      r = renderEmail(env, settings, { subject: c.subject, preheader: c.preheader, body: c.body, accent: c.accent, siteName: c.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "" });
+      r = renderEmail(env, settings, { subject: c.subject, preheader: c.preheader, body: c.body, accent: c.accent, siteName: c.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "", utmCampaign: c.name });
       out.push({ row, msg: { from: fromLine(settings, c.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
     } else if (row.kind === "welcome" && row.list_id) {
       if (!lists.has(row.list_id)) {
@@ -152,16 +157,16 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
       }
       const l = lists.get(row.list_id);
       if (!l) { skip.push(row.id); continue; }
-      r = renderEmail(env, settings, { subject: l.welcome_subject, body: l.welcome_body, accent: l.accent, siteName: l.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "" });
+      r = renderEmail(env, settings, { subject: l.welcome_subject, body: l.welcome_body, accent: l.accent, siteName: l.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "", utmCampaign: "welcome" });
       out.push({ row, msg: { from: fromLine(settings, l.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
     } else if (row.kind === "sequence" && row.step_id) {
       if (!steps.has(row.step_id)) {
-        steps.set(row.step_id, await env.DB.prepare(`SELECT st.subject, st.preheader, st.body, s.accent, s.name AS siteName FROM sequence_steps st
+        steps.set(row.step_id, await env.DB.prepare(`SELECT st.subject, st.preheader, st.body, s.accent, s.name AS siteName, q.name AS seqName FROM sequence_steps st
           JOIN sequences q ON q.id = st.sequence_id LEFT JOIN sites s ON s.id = q.site_id WHERE st.id = ?`).bind(row.step_id).first());
       }
       const st = steps.get(row.step_id);
       if (!st || !st.subject.trim()) { skip.push(row.id); continue; }
-      r = renderEmail(env, settings, { subject: st.subject, preheader: st.preheader, body: st.body, accent: st.accent, siteName: st.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "" });
+      r = renderEmail(env, settings, { subject: st.subject, preheader: st.preheader, body: st.body, accent: st.accent, siteName: st.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "", utmCampaign: "automation-" + (st.seqName || "") });
       out.push({ row, msg: { from: fromLine(settings, st.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
     } else skip.push(row.id);
   }

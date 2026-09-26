@@ -51,7 +51,7 @@ function signup(page: Page, c: Content, o: RenderOpts): string {
   if (c.form === false) return "";
   const cta = c.cta || "Keep me posted";
   return `<form class="signup" method="post" action="/__proof/subscribe" data-proof-form${o.preview ? " data-preview" : ""}>
-  <input type="hidden" name="page" value="${esc(page.id)}">
+  <input type="hidden" name="page" value="${esc(page.id)}"><input type="hidden" name="sref" value="">
   <div class="hp" aria-hidden="true"><label>Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
   <div class="row">
     <label class="sr" for="f-name">Your name</label><input id="f-name" type="text" name="name" placeholder="Your name" maxlength="80" autocomplete="name">
@@ -65,6 +65,7 @@ function signup(page: Page, c: Content, o: RenderOpts): string {
 
 function formScript(o: RenderOpts): string {
   return `<script>
+(function(){var r=new URLSearchParams(location.search).get("sref");if(r&&/^[a-z0-9]{4,12}$/.test(r))document.querySelectorAll("input[name=sref]").forEach(function(i){i.value=r})})();
 document.querySelectorAll("[data-proof-form]").forEach(function(f){
   f.addEventListener("submit",function(e){
     e.preventDefault();

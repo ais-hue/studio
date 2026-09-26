@@ -1,4 +1,5 @@
 import { Env, HttpError, id, now } from "./util";
+import { trackText } from "./links";
 
 /*
  * Social posting through Zernio (zernio.com). Brands are Zernio profiles, each holding at most one account
@@ -173,7 +174,9 @@ export function problems(p: SocialPost): string[] {
     const pl = PLATFORMS[t.platform];
     if (!pl) continue;
     if (pl.needsMedia && !media.length) out.push(`${pl.name} needs a picture or video.`);
-    if (p.content.length > pl.limit) out.push(`${pl.name} allows ${pl.limit.toLocaleString("en")} characters. This is ${p.content.length.toLocaleString("en")}.`);
+    const text = String(opts.captions?.[t.platform] || p.content);
+    if (!text.trim() && !media.length) out.push(`${pl.name} has nothing to post.`);
+    if (text.length > pl.limit) out.push(`${pl.name} allows ${pl.limit.toLocaleString("en")} characters. This is ${text.length.toLocaleString("en")}.`);
     if (t.platform === "pinterest" && !opts.pinterest?.boardId) out.push("Pick a Pinterest board.");
     if (t.platform === "tiktok") {
       if (!opts.tiktok?.privacy_level) out.push("Choose who can see it on TikTok.");
@@ -185,17 +188,32 @@ export function problems(p: SocialPost): string[] {
   return [...new Set(out)];
 }
 
-function payload(p: SocialPost) {
+async function payload(env: Env, p: SocialPost) {
   const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []);
   const media = parse<Array<{ url: string; type: string }>>(p.media, []);
   const opts = parse<any>(p.options, {});
   const hasVideo = media.some((m) => m.type === "video");
+  const track = opts.track !== false;
+  let brand = "";
+  if (track) { try { brand = (await listProfiles(env)).find((b) => b._id === p.profile_id)?.name || ""; } catch { brand = ""; } }
+  const custom: Record<string, string> = {};
+  let pinLink = opts.pinterest?.link || "";
+  for (const t of targets) {
+    const own = String(opts.captions?.[t.platform] || "");
+    let text = own || p.content;
+    if (track) {
+      const ctx = { source_type: "social", source_id: p.id, platform: t.platform, profile_id: p.profile_id, campaign: brand };
+      text = await trackText(env, text, ctx);
+      if (t.platform === "pinterest" && pinLink) pinLink = (await trackText(env, pinLink, ctx)).trim();
+    }
+    if (text !== p.content) custom[t.platform] = text;
+  }
   return {
     content: p.content,
     mediaItems: media.map((m) => ({ url: m.url, type: m.type })),
     platforms: targets.map((t) => {
       let psd: Record<string, unknown> | undefined;
-      if (t.platform === "pinterest") psd = { boardId: opts.pinterest?.boardId, ...(opts.pinterest?.title ? { title: String(opts.pinterest.title).slice(0, 100) } : {}), ...(opts.pinterest?.link ? { link: opts.pinterest.link } : {}) };
+      if (t.platform === "pinterest") psd = { boardId: opts.pinterest?.boardId, ...(opts.pinterest?.title ? { title: String(opts.pinterest.title).slice(0, 100) } : {}), ...(pinLink ? { link: pinLink } : {}) };
       if (t.platform === "tiktok") {
         const tk = opts.tiktok || {};
         psd = { tiktokSettings: {
@@ -205,7 +223,7 @@ function payload(p: SocialPost) {
           ...(tk.brand ? { commercialContentType: "brand_organic" } : {}),
         } };
       }
-      return { platform: t.platform, accountId: t.accountId, ...(psd ? { platformSpecificData: psd } : {}) };
+      return { platform: t.platform, accountId: t.accountId, ...(custom[t.platform] !== undefined ? { customContent: custom[t.platform] } : {}), ...(psd ? { platformSpecificData: psd } : {}) };
     }),
     metadata: { studioPostId: p.id },
   };
@@ -241,9 +259,10 @@ export async function publish(env: Env, p: SocialPost, at: number | null): Promi
     let post: any;
     if (await mock(env)) {
       const targets = parse<Array<{ platform: string }>>(p.targets, []);
+      console.log("Pretend Zernio post:", JSON.stringify(await payload(env, p)));
       post = { _id: id("zp_"), status: at ? "scheduled" : "published", platforms: targets.map((x) => ({ platform: x.platform, status: at ? "scheduled" : "published", platformPostUrl: at ? null : `https://example.com/${x.platform}/${p.id}` })) };
     } else {
-      const d = await call(env, "POST", "/posts", { ...payload(p), ...when });
+      const d = await call(env, "POST", "/posts", { ...(await payload(env, p)), ...when });
       post = d.post || d;
     }
     const r = applyResult(post);

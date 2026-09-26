@@ -33,6 +33,9 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS files ( id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, folder TEXT NOT NULL DEFAULT '', type TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, width INTEGER, height INTEGER, alt TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'ready', upload_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder, created_at)",
  "CREATE INDEX IF NOT EXISTS idx_files_time ON files(created_at)",
+ "CREATE TABLE IF NOT EXISTS links ( id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, url TEXT NOT NULL, source_type TEXT NOT NULL DEFAULT 'manual', source_id TEXT, platform TEXT, profile_id TEXT, original TEXT NOT NULL DEFAULT '', clicks INTEGER NOT NULL DEFAULT 0, last_click_at INTEGER, created_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_type, source_id)",
+ "CREATE TABLE IF NOT EXISTS link_days ( link_id TEXT NOT NULL, day TEXT NOT NULL, clicks INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (link_id, day) )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -41,4 +44,6 @@ export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN bounced_at INTEGER",
  "ALTER TABLE sends ADD COLUMN complained_at INTEGER",
  "CREATE INDEX IF NOT EXISTS idx_sends_step ON sends(step_id)",
+ "ALTER TABLE contacts ADD COLUMN ref_link TEXT",
+ "CREATE INDEX IF NOT EXISTS idx_contacts_ref ON contacts(ref_link)",
 ];

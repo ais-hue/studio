@@ -5,6 +5,7 @@ import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sen
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
+import { linkStats } from "./links";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
@@ -273,7 +274,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         env.DB.prepare(`SELECT e.id, e.sequence_id, e.status, e.exit_reason, e.step_index, e.next_at, e.created_at, q.name, (SELECT COUNT(*) FROM sequence_steps x WHERE x.sequence_id = q.id) AS steps
           FROM enrollments e JOIN sequences q ON q.id = e.sequence_id WHERE e.contact_id = ? ORDER BY e.created_at DESC`).bind(b),
       ]);
-      return json({ contact: ct, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results, enrollments: enrolled.results });
+      const ref = (ct as any).ref_link ? await env.DB.prepare("SELECT platform, source_type, source_id FROM links WHERE code = ?").bind((ct as any).ref_link).first() : null;
+      return json({ contact: ct, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results, enrollments: enrolled.results, ref });
     }
     if (b && m === "PATCH") {
       const d = await body(req);
@@ -586,6 +588,12 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   }
 
 
+
+  /* ---------- link results ---------- */
+  if (a === "links" && b === "stats" && m === "GET") {
+    const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days")) || 30));
+    return json({ days, platforms: await linkStats(env, { since: t - days * 864e5, profile_id: str(url.searchParams.get("brand"), 80) || undefined, source_id: str(url.searchParams.get("post"), 80) || undefined }) });
+  }
 
   /* ---------- calendar ---------- */
   if (a === "calendar" && m === "GET") {

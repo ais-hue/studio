@@ -3,6 +3,7 @@ import { Page, RenderOpts, Site, renderBlog, renderNotice, renderPage } from "./
 import { processQueue, sendConfirmation } from "./email";
 import { exitAll, onCampaignClick, onListJoin, runSequences } from "./automation";
 import { handleResendWebhook } from "./hooks";
+import { followLink } from "./links";
 
 export async function serveStatic(req: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(req.url);
@@ -89,6 +90,11 @@ async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: st
   const settings = await getSettings(env);
   const list = await siteList(env, site);
   const r = await upsertContact(env, email, name, `${site.subdomain}/${page.slug || "home"}`, settings.consent_text, list.id, { pending: settings.double_optin === "1" });
+  // Credit a brand-new contact to the tracked link that brought them (first touch only).
+  const ref = String(form.get("sref") || "").replace(/[^a-z0-9]/g, "").slice(0, 12);
+  if (r.created && ref && (await env.DB.prepare("SELECT 1 FROM links WHERE code = ?").bind(ref).first())) {
+    await env.DB.prepare("UPDATE contacts SET ref_link = ?, source = source || ? WHERE id = ?").bind(ref, " via link", r.contactId).run();
+  }
   const back = new URL(req.headers.get("referer") || `https://${host}/`);
   if (r.status === "pending") {
     // At most one confirmation email per address every 10 minutes, so the form can't be used to flood someone.
@@ -144,6 +150,7 @@ async function handleGo(req: Request, env: Env, ctx: ExecutionContext, url: URL,
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts[0] === "hooks" && parts[1] === "resend" && req.method === "POST") return handleResendWebhook(req, env);
   if (parts[0] === "confirm" && parts[1]) return confirm(req, env, ctx, parts[1], o);
+  if (parts[0] === "l" && parts[1]) return followLink(req, env, ctx, parts[1]);
   if (parts[0] === "o" && parts[1]) {
     const sid = parts[1].replace(/\.gif$/, "");
     await env.DB.prepare("UPDATE sends SET opened_at = COALESCE(opened_at, ?) WHERE id = ?").bind(now(), sid).run();
