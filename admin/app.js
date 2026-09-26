@@ -18,6 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
+var VERSION = "202609262230";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -74,6 +75,18 @@ function refreshNav(){
     markNav();
   }).catch(function(){});
 }
+function checkVersion(){
+  api("GET","me").then(function(me){
+    if(me.version && me.version!==VERSION && !$("#updBar")){
+      var d=document.createElement("div"); d.id="updBar"; d.className="notice updbar";
+      d.innerHTML='<p><b>Studio has been updated.</b> Reload to get the latest version.</p><button class="btn sm primary" type="button">Reload</button>';
+      d.querySelector("button").onclick=function(){ location.reload() };
+      document.body.appendChild(d);
+    }
+  }).catch(function(){});
+}
+setInterval(checkVersion, 5*60*1000);
+document.addEventListener("visibilitychange", function(){ if(!document.hidden) checkVersion() });
 function markNav(){
   var parts=(location.hash.replace(/^#\/?/,"")||"").split("/").filter(Boolean), top=parts[0]||"overview";
   $$("[data-nav]").forEach(function(a){ a.setAttribute("aria-current", a.dataset.nav===top && !(top==="sites"&&parts[1]&&parts[1]!=="new") ? "page" : "false") });

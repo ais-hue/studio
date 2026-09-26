@@ -312,3 +312,4 @@ ol.steps li{padding-left:4px}
 input[type=number],input[type=password]{background:var(--field);border:1px solid var(--line2);padding:8px 11px;font-size:13.5px;color:var(--t1)}
 input[type=number]:focus,input[type=password]:focus{outline:none;border-color:var(--coral)}
 .drawer h2.sec+.tablewrap{margin-top:-14px}
+.updbar{position:fixed;right:20px;bottom:20px;z-index:30;max-width:min(420px,calc(100% - 32px));box-shadow:0 6px 24px rgba(14,22,40,.18)}

@@ -4,6 +4,7 @@ import { defaultWelcome, siteList, upsertContact } from "./public";
 import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sendTest } from "./email";
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
 import { connectResendWebhook, webhookStatus } from "./hooks";
+import { VERSION } from "./version";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -98,7 +99,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   const t = now();
 
   /* ---------- overview ---------- */
-  if (a === "me") return json({ email: user, root: env.ROOT_DOMAIN, emailConnected: !!env.RESEND_API_KEY || env.DEV_AUTH === "1", dev: env.DEV_AUTH === "1" });
+  if (a === "me") return json({ email: user, root: env.ROOT_DOMAIN, emailConnected: !!env.RESEND_API_KEY || env.DEV_AUTH === "1", dev: env.DEV_AUTH === "1", version: VERSION });
 
   if (a === "overview" && m === "GET") {
     const since = t - 30 * 864e5;
