@@ -89,6 +89,12 @@ async function resendBatch(env: Env, msgs: Array<Record<string, unknown>>): Prom
   return msgs.map((_m, i) => (ids[i]?.id ? { ok: true, id: ids[i].id } : { ok: false, error: "No id returned" }));
 }
 
+/** One transactional email (sign-in links). */
+export async function sendTransactional(env: Env, m: { to: string; from: string; subject: string; html: string; text: string }): Promise<{ ok: boolean; error?: string }> {
+  const [r] = await resendBatch(env, [{ from: m.from, to: [m.to], subject: m.subject, html: m.html, text: m.text }]);
+  return r;
+}
+
 export async function sendTest(env: Env, c: Campaign, to: string): Promise<{ ok: boolean; error?: string }> {
   const settings = await getSettings(env);
   const site = c.site_id ? await env.DB.prepare("SELECT name, accent FROM sites WHERE id = ?").bind(c.site_id).first<{ name: string; accent: string }>() : null;

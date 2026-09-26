@@ -4,6 +4,7 @@ import { handleApi } from "./api";
 import { handlePublic, serveStatic } from "./public";
 import { runScheduled } from "./email";
 import { SCHEMA } from "./schema";
+import { handleAuth } from "./login";
 
 let schemaReady: Promise<unknown> | null = null;
 function ensureSchema(env: Env) {
@@ -13,10 +14,20 @@ function ensureSchema(env: Env) {
 
 async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
+  if (url.pathname === "/__proof/site.css") return serveStatic(req, env, "/site.css");
+  if (url.pathname.startsWith("/__proof/fonts/")) return serveStatic(req, env, url.pathname.replace("/__proof", ""));
+  if (url.pathname === "/login" || url.pathname.startsWith("/auth/")) {
+    if (req.method === "POST") {
+      const origin = req.headers.get("origin");
+      if (origin && origin !== "null" && new URL(origin).host !== url.host) return new Response("Cross-site request refused.", { status: 403 });
+    }
+    const r = await handleAuth(req, env, ctx);
+    if (r) return r;
+  }
   const user = await authEmail(req, env);
   if (!user) {
-    const msg = env.ACCESS_AUD ? "Sign in through Cloudflare Access to use the studio." : "The studio login isn’t set up yet.";
-    return url.pathname.startsWith("/api/") ? json({ error: msg }, 401) : new Response(msg, { status: 401 });
+    if (url.pathname.startsWith("/api/")) return json({ error: "You’ve been signed out. Sign in again to continue." }, 401);
+    return Response.redirect(new URL("/login", req.url).toString(), 302);
   }
   if (url.pathname.startsWith("/api/")) {
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -26,8 +37,6 @@ async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
     }
     return handleApi(req, env, ctx, user);
   }
-  if (url.pathname === "/__proof/site.css") return serveStatic(req, env, "/site.css");
-  if (url.pathname.startsWith("/__proof/fonts/")) return serveStatic(req, env, url.pathname.replace("/__proof", ""));
   const res = await env.ASSETS.fetch(req);
   if (res.status === 404) return env.ASSETS.fetch(new Request(new URL("/", req.url).toString(), req));
   return res;

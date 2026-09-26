@@ -6,6 +6,7 @@ export interface Env {
   ACCESS_AUD: string;
   DEV_AUTH: string;
   RESEND_API_KEY?: string;
+  ADMIN_EMAILS: string;
 }
 
 export const now = () => Date.now();

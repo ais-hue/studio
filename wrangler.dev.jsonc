@@ -18,7 +18,9 @@
   "triggers": { "crons": ["* * * * *"] },
   "vars": {
     "ROOT_DOMAIN": "aisling.online",
-    // Filled in after Cloudflare Access is set up for studio.aisling.online. Until then the studio refuses every sign-in.
+    // Who can sign in to the studio (comma-separated).
+    "ADMIN_EMAILS": "hello@aisling.online",
+    // Optional: Cloudflare Access as a second way in. Studio uses its own email-link sign-in.
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_AUD": "",
     "DEV_AUTH": "0"

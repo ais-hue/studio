@@ -1,4 +1,5 @@
 import { Env } from "./util";
+import { sessionEmail } from "./login";
 
 let certCache: { at: number; keys: Record<string, CryptoKey> } | null = null;
 
@@ -20,6 +21,8 @@ const b64u = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_
 /** Returns the signed-in email, or null. Only Cloudflare Access can issue a valid token. */
 export async function authEmail(req: Request, env: Env): Promise<string | null> {
   if (env.DEV_AUTH === "1") return "dev@localhost";
+  const fromSession = await sessionEmail(req, env);
+  if (fromSession) return fromSession;
   if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null;
   const jwt = req.headers.get("cf-access-jwt-assertion");
   if (!jwt) return null;

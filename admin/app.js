@@ -25,7 +25,7 @@ function api(method, path, body){
   return fetch("/api/"+path, opt).then(function(r){
     var ct = r.headers.get("content-type")||"";
     if(ct.indexOf("application/json")<0){ return r.text().then(function(t){ if(!r.ok) throw new Error("The server answered with an error ("+r.status+")."); return t }) }
-    return r.json().then(function(d){ if(!r.ok) throw new Error(d.error || "That didn’t work."); return d });
+    return r.json().then(function(d){ if(r.status===401){ location.href="/login"; throw new Error(d.error||"Signed out") } if(!r.ok) throw new Error(d.error || "That didn’t work."); return d });
   }, function(){ throw new Error("Couldn’t reach Studio. Check your connection and try again.") });
 }
 

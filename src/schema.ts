@@ -1,4 +1,4 @@
-// Generated from migrations/0001_init.sql. Runs once per worker instance; every statement is idempotent.
+// Generated from migrations/*.sql. Runs once per worker instance; every statement is idempotent.
 export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS settings ( key TEXT PRIMARY KEY, value TEXT NOT NULL )",
  "CREATE TABLE IF NOT EXISTS sites ( id TEXT PRIMARY KEY, name TEXT NOT NULL, subdomain TEXT NOT NULL UNIQUE, accent TEXT NOT NULL DEFAULT 'brass', theme TEXT NOT NULL DEFAULT 'auto', status TEXT NOT NULL DEFAULT 'building', tagline TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL )",
@@ -12,5 +12,8 @@ export const SCHEMA: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_members_c ON list_members(contact_id)",
  "CREATE INDEX IF NOT EXISTS idx_sends_queue ON sends(status, created_at)",
  "CREATE INDEX IF NOT EXISTS idx_sends_campaign ON sends(campaign_id)",
- "CREATE INDEX IF NOT EXISTS idx_contacts_time ON contacts(created_at)"
+ "CREATE INDEX IF NOT EXISTS idx_contacts_time ON contacts(created_at)",
+ "CREATE TABLE IF NOT EXISTS login_tokens ( hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS sessions ( hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, user_agent TEXT NOT NULL DEFAULT '' )",
+ "CREATE INDEX IF NOT EXISTS idx_login_email ON login_tokens(email, created_at)"
 ];
