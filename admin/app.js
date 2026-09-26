@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270004";
+var VERSION = "202609270016";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -885,6 +885,35 @@ function slotsPanel(host, brand){
   }).catch(function(e){ host.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
 }
 
+/* performance panel for a brand, on the Social page */
+function perfPanel(host, brand){
+  api("GET","social/performance?brand="+encodeURIComponent(brand._id)+"&days=90").then(function(d){
+    if(!d.posts){ host.innerHTML=""; return }
+    var plats=Object.keys(d.totals);
+    var h='<section class="panel"><h2 class="sec">How posts are doing <span class="actions"><span class="hint">'+(d.updated?"Updated "+fmtDate(d.updated,true):"Numbers arrive within the hour after posting")+'</span><button class="btn sm ghost" type="button" id="pfRefresh">Refresh</button></span></h2>';
+    if(!d.measured){ host.innerHTML=h+'<div class="empty">No numbers yet. Zernio reports likes, comments and reach a little while after each post goes out.</div></section>'; bind(); return }
+    h+='<div class="plats">'+plats.map(function(pl){ var t=d.totals[pl]; return '<div class="plat"><span class="pn">'+esc(platName(pl))+'</span><span class="pu">'+t.posts+' post'+(t.posts===1?"":"s")+' · '+Math.round(t.engagement/t.posts*10)/10+' interactions each</span><span class="pu">'+t.likes+' likes · '+t.comments+' comments · '+t.shares+' shares'+(t.reach?' · '+t.reach.toLocaleString()+' seen':'')+'</span></div>' }).join("")+'</div>';
+    h+='<div class="perfgrid"><div><h3 class="mini">Best times <span class="hint">average interactions per post, '+esc(d.timezone)+'</span></h3>';
+    if(d.enough){
+      var max=0; d.grid.forEach(function(r){ r.forEach(function(c){ if(c.avg>max) max=c.avg }) });
+      var order=[1,2,3,4,5,6,0];
+      h+='<div class="heat" role="table" aria-label="Average interactions by day and time"><div role="row" class="hrow"><span></span>'+d.blocks.map(function(b){ return '<span role="columnheader" class="hh" title="'+b.from+':00–'+b.to+':00">'+esc(b.name)+'</span>' }).join("")+'</div>'+
+        order.map(function(di){ return '<div role="row" class="hrow"><span role="rowheader" class="hd">'+DAYS_SHORT[di]+'</span>'+d.grid[di].map(function(c){ var a=max?c.avg/max:0;
+          return '<span role="cell" class="hc'+(c.posts?"":" none")+'" style="--a:'+a.toFixed(2)+'" title="'+(c.posts?c.avg+" avg from "+c.posts+" post"+(c.posts===1?"":"s"):"No posts yet")+'">'+(c.posts?c.avg:"")+'</span>' }).join("")+'</div>' }).join("")+'</div>';
+      h+= d.best ? '<p class="suggest"><b>'+esc(d.best.dayName)+' '+esc(d.best.block.toLowerCase())+'</b> works best so far'+(d.best.lift>0?' ('+d.best.lift+'% above your average)':'')+'. <button class="btn sm" type="button" id="pfAdd" data-day="'+d.best.day+'" data-time="'+esc(d.best.slot)+'">Add '+DAYS_SHORT[d.best.day]+' '+esc(d.best.slot)+' as a posting time</button></p>'
+        : '<p class="hint">No clear winner yet. Keep posting at a few different times and this fills in.</p>';
+    } else h+='<p class="hint">Once '+esc(brand.name)+' has 5 posts with numbers ('+d.measured+' so far), Studio shows which days and times work best.</p>';
+    h+='</div><div><h3 class="mini">Top posts <span class="hint">last '+d.days+' days</span></h3><div class="rows">'+d.top.map(function(t){ return '<a class="rowi nosq" href="#/social/p/'+esc(t.id)+'"><span class="t">'+esc(t.title)+'<small>'+fmtDate(t.at)+(t.reach?' · '+t.reach.toLocaleString()+' seen':'')+'</small></span><span class="meta num">'+t.engagement+'</span></a>' }).join("")+'</div></div></div></section>';
+    host.innerHTML=h; bind();
+    function bind(){
+      var r=$("#pfRefresh",host); if(r) r.onclick=function(){ r.disabled=true; api("POST","social/performance/refresh").then(function(x){ toast(x.updated+" post"+(x.updated===1?"":"s")+" updated"); perfPanel(host,brand) }).catch(function(e){ r.disabled=false; toast(e.message,true) }) };
+      var a=$("#pfAdd",host); if(a) a.onclick=function(){ a.disabled=true;
+        api("GET","social/brands/"+brand._id+"/slots").then(function(s){ var slots=s.slots.concat([{day:Number(a.dataset.day), time:a.dataset.time}]); return api("PUT","social/brands/"+brand._id+"/slots",{slots:slots}) })
+          .then(function(){ toast("Posting time added"); slotsPanel($("#slotsHost"), brand) }).catch(function(e){ a.disabled=false; toast(e.message,true) }) };
+    }
+  }).catch(function(){ host.innerHTML="" });
+}
+
 /* ============ file library ============ */
 function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+" B"; if(n<1048576) return Math.round(n/1024)+" KB"; if(n<1073741824) return (n/1048576).toFixed(n<10485760?1:0)+" MB"; return (n/1073741824).toFixed(2)+" GB" }
 function imageSize(file){
@@ -1157,7 +1186,7 @@ function socialView(brandParam){
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
               (a ? '<span class="pu">@'+esc(a.username)+(a.active?'':' · needs reconnecting')+'</span><button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
-                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="resHost"></div><div id="slotsHost"></div>';
+                 : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="resHost"></div><div id="perfHost"></div><div id="slotsHost"></div>';
         var groups=[["Needs attention",function(p){return p.status==="failed"||p.status==="partial"}],["Coming up",function(p){return p.status==="scheduled"||p.status==="publishing"}],["Drafts",function(p){return p.status==="draft"}],["Posted",function(p){return p.status==="published"}]];
         if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
         groups.forEach(function(g){
@@ -1169,6 +1198,7 @@ function socialView(brandParam){
         });
         v.innerHTML=html;
         slotsPanel($("#slotsHost"), brand);
+        perfPanel($("#perfHost"), brand);
         api("GET","links/stats?brand="+encodeURIComponent(brand._id)+"&days=30").then(function(d){ if(!d.platforms.length) return; var h=$("#resHost"); if(!h) return;
           var tc=0, ts=0; d.platforms.forEach(function(x){ tc+=x.clicks; ts+=x.signups });
           h.innerHTML='<section class="panel"><h2 class="sec">Last 30 days <span class="hint">'+tc+' clicks · '+ts+' sign-ups from '+esc(brand.name)+' posts</span></h2><div class="plats">'+d.platforms.map(function(x){ return '<div class="plat"><span class="pn">'+esc(platName(x.platform))+'</span><span class="pu">'+x.clicks+' click'+(x.clicks===1?"":"s")+' · '+x.signups+' sign-up'+(x.signups===1?"":"s")+'</span></div>' }).join("")+'</div></section>' }).catch(function(){});
@@ -1210,15 +1240,19 @@ function socialPostView(pid){
         if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
         html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
           return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
-        if(p.status==="published"||p.status==="partial") html+='<section class="panel"><h2 class="sec">Link results <span class="hint">clicks on tracked links, and new sign-ups they brought</span></h2><div id="spLinks"><div class="loading" style="padding:14px 18px">Loading…</div></div></section>';
+        if(p.status==="published"||p.status==="partial") html+='<section class="panel"><h2 class="sec">Results <span class="hint">from each platform, plus clicks and sign-ups from tracked links</span></h2><div id="spLinks"><div class="loading" style="padding:14px 18px">Loading…</div></div></section>';
         if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
         html+='</div><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
         v.innerHTML=html;
         renderPreview();
         var us=$("#spUnsched"); if(us) us.onclick=function(){ api("POST","social/posts/"+pid+"/unschedule").then(function(){ toast("Back to draft"); route() }).catch(function(e){ toast(e.message,true) }) };
         if($("#spLinks")) api("GET","links/stats?post="+encodeURIComponent(pid)+"&days=365").then(function(d){ var h=$("#spLinks"); if(!h) return;
-          h.innerHTML = d.platforms.length ? '<div class="tablewrap"><table><thead><tr><th>Platform</th><th class="r">Clicks</th><th class="r">Sign-ups</th></tr></thead><tbody>'+d.platforms.map(function(x){ return '<tr><td>'+esc(platName(x.platform))+'</td><td class="r mono">'+x.clicks+'</td><td class="r mono">'+x.signups+'</td></tr>' }).join("")+'</tbody></table></div>'
-            : '<div class="empty">No tracked links in this post.</div>' }).catch(function(){});
+          var link={}; d.platforms.forEach(function(x){ link[x.platform]=x });
+          var plats=p.targets.map(function(t){return t.platform}), mt=p.metrics||{}, n=function(o,k){ return o&&o[k]!=null?Number(o[k]).toLocaleString():"—" };
+          var seen=function(o){ if(!o) return "—"; var v=Math.max(o.impressions||0,o.reach||0,o.views||0,o.plays||0); return v?v.toLocaleString():"—" };
+          h.innerHTML='<div class="tablewrap"><table><thead><tr><th>Platform</th><th class="r">Seen</th><th class="r">Likes</th><th class="r">Comments</th><th class="r">Shares</th><th class="r">Link clicks</th><th class="r">Sign-ups</th></tr></thead><tbody>'+plats.map(function(pl){ var m=mt[pl], l=link[pl];
+            return '<tr><td>'+esc(platName(pl))+'</td><td class="r mono">'+seen(m)+'</td><td class="r mono">'+n(m,"likes")+'</td><td class="r mono">'+n(m,"comments")+'</td><td class="r mono">'+(m?((m.shares||0)+(m.reposts||0)).toLocaleString():"—")+'</td><td class="r mono">'+(l?l.clicks:"—")+'</td><td class="r mono">'+(l?l.signups:"—")+'</td></tr>' }).join("")+'</tbody></table></div>'+
+            (p.metrics_at?'<p class="hint" style="margin:10px 18px">Numbers from '+fmtDate(p.metrics_at,true)+'. They refresh every hour.</p>':'<p class="hint" style="margin:10px 18px">Likes and reach arrive within the hour after posting.</p>') }).catch(function(){});
         var mv=$("#spMoveGo"); if(mv) mv.onclick=function(){ var val=$("#spMove").value; if(!val){ toast("Pick a new date and time first.",true); return }
           api("POST","social/posts/"+pid+"/reschedule",{at:new Date(val).getTime()}).then(function(){ toast("Moved"); route() }).catch(function(e){ toast(e.message,true) }) };
         var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Trying again"); route() }).catch(function(e){ toast(e.message,true); rt.disabled=false }) };
@@ -1391,7 +1425,12 @@ function settingsView(){
         (zr.connected && !zr.simulated
           ? '<p style="margin:0"><span class="chip sent">Connected</span> Studio posts through Zernio. Connect accounts on the <a href="#/social">Social</a> page.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Replace the key</button><div id="zkHost" hidden></div>'
           : '<p style="margin:0">Studio posts to Instagram, TikTok, LinkedIn and the rest through Zernio. First 2 accounts free, then $6 a month each.</p><div id="zkHost"></div>')+
-        '</div></section><section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
+        '</div></section><section class="panel"><h2 class="sec">Connect Claude</h2><div class="pad stack" style="gap:12px">'+
+        '<p style="margin:0">Let Claude draft posts and emails, add files and read your results. It can only save drafts: nothing goes out until you send it here.</p>'+
+        '<ol class="steps"><li>In Claude, open <b>Settings → Connectors</b> and choose <b>Add custom connector</b>.</li>'+
+        '<li>Name it <b>Studio</b> and paste this address:<div class="affix" style="margin-top:6px"><input type="text" id="mcpUrl" readonly value="https://studio.'+esc(S.me.root)+'/mcp"><button class="btn sm" type="button" id="mcpCopy" style="border:0;border-left:1px solid var(--line)">Copy</button></div></li>'+
+        '<li>Click <b>Connect</b>, sign in here with your email link if asked, and press <b>Allow</b>.</li></ol></div></section>'+
+        '<section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
       '<section class="panel"><h2 class="sec">Connections</h2><div class="rows">'+
       '<div class="rowi" style="--pc:var(--'+(S.me.emailConnected?"moss":"brass")+')"><span class="t">Email sending<small>Resend, from @'+esc(S.me.root)+'</small></span><span class="meta"><span class="chip '+(S.me.emailConnected?"sent":"draft")+'">'+(S.me.emailConnected?(S.me.dev?"Simulated":"Connected"):"Not yet")+'</span></span></div>'+
       '<div class="rowi" style="--pc:var(--'+(ev.connected?"moss":"brass")+')"><span class="t">Delivery updates<small>Bounces and spam reports from Resend</small></span><span class="meta"><span class="chip '+(ev.connected?"sent":"draft")+'">'+(ev.connected?"Connected":"Not yet")+'</span></span></div>'+
@@ -1418,6 +1457,7 @@ function settingsView(){
     if(auto) auto.onclick=function(){ var b=this; b.disabled=true; b.textContent="Connecting…";
       api("POST","settings/connect-resend").then(function(){ toast("Connected"); route() })
         .catch(function(e){ b.disabled=false; b.textContent="Connect automatically"; manual($("#whManual"), e.message) }) };
+    $("#mcpCopy").onclick=function(){ var i=$("#mcpUrl"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){ toast("Copied") },function(){ document.execCommand("copy"); toast("Copied") }) };
     var rp=$("#whReplace"); if(rp) rp.onclick=function(){ this.hidden=true; manual($("#whManual")) };
     function zkForm(host){
       host.hidden=false;

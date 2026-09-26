@@ -6,6 +6,7 @@ import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./autom
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
 import { linkStats } from "./links";
+import { performance, syncMetrics } from "./performance";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
@@ -684,13 +685,24 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const slots = await setSlots(env, s2, Array.isArray(d.slots) ? d.slots.map((x: any) => ({ day: Number(x.day), time: String(x.time || "") })) : []);
       return json({ slots, next: await nextSlot(env, s2, tz), timezone: tz });
     }
+    if (s1 === "performance" && !s2 && m === "GET") {
+      const brand = str(url.searchParams.get("brand"), 80);
+      if (!brand) throw new HttpError(400, "Pick a brand.");
+      return json(await performance(env, brand, Math.min(365, Math.max(7, Number(url.searchParams.get("days")) || 90))));
+    }
+    if (s1 === "performance" && s2 === "refresh" && m === "POST") {
+      const last = await env.DB.prepare("SELECT value FROM settings WHERE key = 'metrics_refreshed'").first<{ value: string }>();
+      if (last && t - Number(last.value) < 5 * 60_000) throw new HttpError(429, "The numbers were refreshed a moment ago. Try again in a few minutes.");
+      await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('metrics_refreshed', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(String(t)).run();
+      return json({ updated: await syncMetrics(env) });
+    }
     if (s1 === "accounts" && s2 && !s3 && m === "DELETE") { await disconnect(env, s2); return json({ ok: true }); }
     if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
     if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2) });
     if (s1 === "media" && m === "POST") return json({ media: await uploadMedia(env, req) }, 201);
 
     if (s1 === "posts") {
-      const view = (p: SocialPost) => ({ ...p, media: parseJson(p.media, []), targets: parseJson(p.targets, []), options: parseJson(p.options, {}), results: parseJson(p.results, []), problems: problems(p) });
+      const view = (p: SocialPost) => ({ ...p, media: parseJson(p.media, []), targets: parseJson(p.targets, []), options: parseJson(p.options, {}), results: parseJson(p.results, []), metrics: parseJson((p as any).metrics || "{}", {}), problems: problems(p) });
       const get = async (pid: string) => {
         const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>();
         if (!p) throw new HttpError(404, "That post doesn’t exist any more.");

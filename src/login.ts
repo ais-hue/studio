@@ -35,7 +35,7 @@ export async function sessionEmail(req: Request, env: Env): Promise<string | nul
   return row.email;
 }
 
-function page(title: string, body: string, status = 200, headers: Record<string, string> = {}): Response {
+export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}): Response {
   return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex"><title>${esc(title)} · Studio</title>
 <link rel="stylesheet" href="/__proof/fonts/studio-fonts.css">
@@ -80,7 +80,7 @@ export async function handleAuth(req: Request, env: Env, ctx: ExecutionContext):
   const url = new URL(req.url);
   const p = url.pathname;
 
-  if (p === "/login" && req.method === "GET") return loginPage();
+  if (p === "/login" && req.method === "GET") return loginPage(url.searchParams.get("connect") ? "Sign in to connect Claude to Studio." : "");
 
   if (p === "/auth/request" && req.method === "POST") {
     const form = await req.formData().catch(() => null);
@@ -127,11 +127,13 @@ export async function handleAuth(req: Request, env: Env, ctx: ExecutionContext):
       .bind(await sha256(session), row!.email, now() + SESSION_TTL, now(), (req.headers.get("user-agent") || "").slice(0, 200)).run();
     ctx.waitUntil(env.DB.prepare("DELETE FROM login_tokens WHERE expires_at < ?").bind(now() - 86400000).run());
     const secure = url.protocol === "https:" ? "; Secure" : "";
-    return new Response(null, { status: 303, headers: {
-      location: "/",
-      "set-cookie": `${COOKIE}=${encodeURIComponent(session)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${secure}`,
-      "cache-control": "no-store",
-    } });
+    // Coming back from "Connect to Claude": carry on to the approval page.
+    const nextRaw = decodeURIComponent(cookieValue(req, "studio_next") || "");
+    const next = nextRaw.startsWith("/oauth/authorize?") ? nextRaw : "/";
+    const h = new Headers({ location: next, "cache-control": "no-store" });
+    h.append("set-cookie", `${COOKIE}=${encodeURIComponent(session)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${secure}`);
+    if (nextRaw) h.append("set-cookie", `studio_next=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+    return new Response(null, { status: 303, headers: h });
   }
 
   if (p === "/auth/logout" && req.method === "POST") {

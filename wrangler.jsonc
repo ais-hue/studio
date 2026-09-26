@@ -3,7 +3,7 @@
   "name": "studio",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
     "directory": "./admin",
     "binding": "ASSETS",
@@ -13,6 +13,10 @@
   // File library. Created automatically on deploy (R2 must be switched on in the account).
   "r2_buckets": [
     { "binding": "FILES", "bucket_name": "studio-files" }
+  ],
+  // Sign-in tokens for the Claude connector. Created automatically on deploy.
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV" }
   ],
   "d1_databases": [
     { "binding": "DB", "database_name": "studio", "migrations_dir": "migrations" }

@@ -68,6 +68,45 @@ export async function uploadSmall(env: Env, req: Request): Promise<FileRow> {
   return (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!;
 }
 
+/** Read width and height from PNG, GIF, JPEG or WebP bytes. */
+export function imageDims(b: Uint8Array): { w: number; h: number } | null {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  try {
+    if (b[0] === 0x89 && b[1] === 0x50) return { w: dv.getUint32(16), h: dv.getUint32(20) };
+    if (b[0] === 0x47 && b[1] === 0x49) return { w: dv.getUint16(6, true), h: dv.getUint16(8, true) };
+    if (b[0] === 0x52 && b[8] === 0x57 && b[12] === 0x56) {
+      const kind = String.fromCharCode(b[12], b[13], b[14], b[15]);
+      if (kind === "VP8X") return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+      if (kind === "VP8 ") return { w: dv.getUint16(26, true) & 0x3fff, h: dv.getUint16(28, true) & 0x3fff };
+      if (kind === "VP8L") { const v = dv.getUint32(21, true); return { w: (v & 0x3fff) + 1, h: ((v >> 14) & 0x3fff) + 1 }; }
+    }
+    if (b[0] === 0xff && b[1] === 0xd8) {
+      let i = 2;
+      while (i < b.length - 9) {
+        if (b[i] !== 0xff) { i++; continue; }
+        const mk = b[i + 1], len = dv.getUint16(i + 2);
+        if (mk >= 0xc0 && mk <= 0xcf && mk !== 0xc4 && mk !== 0xc8 && mk !== 0xcc) return { w: dv.getUint16(i + 7), h: dv.getUint16(i + 5) };
+        i += 2 + len;
+      }
+    }
+  } catch { /* not an image we can read */ }
+  return null;
+}
+
+/** Save bytes Studio already has (from Claude, or fetched from a link) as a library file. */
+export async function storeBytes(env: Env, bytes: Uint8Array, o: { name: string; type: string; folder?: string; alt?: string }): Promise<FileRow> {
+  const type = o.type.toLowerCase();
+  if (!ALLOWED.test(type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!bytes.byteLength) throw new HttpError(400, "That file is empty.");
+  const key = newKey(o.name, type);
+  await bucket(env).put(key, bytes, { httpMetadata: { contentType: type, cacheControl: "public, max-age=31536000, immutable" } });
+  const dim = type.startsWith("image/") ? imageDims(bytes) : null;
+  const t = now(), fid = id("f_");
+  await env.DB.prepare(`INSERT INTO files (id, key, name, folder, type, kind, size, width, height, alt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(fid, key, o.name.slice(0, 160), (o.folder || "").slice(0, 60), type, kindOf(type), bytes.byteLength, dim?.w || null, dim?.h || null, (o.alt || "").slice(0, 300), t, t).run();
+  return (await env.DB.prepare("SELECT * FROM files WHERE id = ?").bind(fid).first<FileRow>())!;
+}
+
 /** Start a big upload. The browser then sends parts of PART_SIZE bytes. */
 export async function startBig(env: Env, req: Request): Promise<{ file: FileRow; partSize: number }> {
   const m = meta(req);

@@ -3,6 +3,7 @@ import { tagUrl } from "./links";
 import { runSequences } from "./automation";
 import { syncSocial } from "./social";
 import { cleanUploads } from "./files";
+import { syncMetrics } from "./performance";
 
 interface SendRow {
   id: string; campaign_id: string | null; list_id: string | null; step_id: string | null; kind: string;
@@ -197,7 +198,9 @@ export async function runScheduled(env: Env): Promise<void> {
   await runSequences(env, 300);
   await processQueue(env, 500);
   await syncSocial(env).catch((e) => console.error("Social sync:", e));
-  if (new Date().getUTCMinutes() === 7) await cleanUploads(env).catch((e) => console.error("File cleanup:", e));
+  const minute = new Date().getUTCMinutes();
+  if (minute === 7) await cleanUploads(env).catch((e) => console.error("File cleanup:", e));
+  if (minute === 23) await syncMetrics(env).catch((e) => console.error("Performance sync:", e));
 }
 
 /** Test one automation email. */

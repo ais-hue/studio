@@ -12,8 +12,13 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 - **Automations** start when someone joins a list, clicks a link in a campaign, or is added by hand. The every-minute cron moves people along and queues each email; the send queue delivers it.
 - **Social posts** go out through Zernio (zernio.com). Brands are Zernio profiles; drafts live in Studio, and scheduled posts are handed to Zernio and checked on by the cron.
 - **Tracked links**: links in social posts become `go.<domain>/l/<code>` (UTM-tagged; bots ignored). Links to Studio sites carry `sref=<code>`, which the signup form sends back so the new contact is credited to that post and platform. No cookies.
+- **Performance**: every hour (minute 23) Studio pulls likes, comments, shares and reach from Zernio's analytics for posts from the last 90 days, and works out best days and times per brand.
 - **Files** live in R2 (binding `FILES`, bucket `studio-files`) and are served publicly at `files.<domain>/<key>`. Big files upload in 50 MB parts.
 - **Bounces and spam reports** come back from Resend to `go.<domain>/hooks/resend` (signed, checked against the signing secret). Hard bounces and complaints stop all email to that address and take it out of automations.
+
+## Claude connector
+
+Studio is a remote MCP server at `https://studio.<domain>/mcp` (Streamable HTTP, JSON responses). Sign-in is OAuth 2.1 through `@cloudflare/workers-oauth-provider` (PKCE, DCR and CIMD; tokens in the `OAUTH_KV` namespace). The approval page is `/oauth/authorize`, behind Studio's email-link sign-in. Tools (`src/mcp.ts`) only read or save drafts: nothing posts, schedules or sends.
 
 ## Deploying
 

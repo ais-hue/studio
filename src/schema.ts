@@ -46,4 +46,6 @@ export const ALTERS: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_sends_step ON sends(step_id)",
  "ALTER TABLE contacts ADD COLUMN ref_link TEXT",
  "CREATE INDEX IF NOT EXISTS idx_contacts_ref ON contacts(ref_link)",
+ "ALTER TABLE social_posts ADD COLUMN metrics TEXT",
+ "ALTER TABLE social_posts ADD COLUMN metrics_at INTEGER",
 ];
