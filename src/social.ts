@@ -1,5 +1,6 @@
 import { Env, HttpError, id, now } from "./util";
 import { trackText } from "./links";
+import { tagFor } from "./initiatives";
 
 /*
  * Social posting through Zernio (zernio.com). Brands are Zernio profiles, each holding at most one account
@@ -217,13 +218,14 @@ async function payload(env: Env, p: SocialPost) {
   const track = opts.track !== false;
   let brand = "";
   if (track) { try { brand = (await listProfiles(env)).find((b) => b._id === p.profile_id)?.name || ""; } catch { brand = ""; } }
+  const campaignTag = track ? await tagFor(env, (p as any).initiative_id) : "";
   const custom: Record<string, string> = {};
   let pinLink = opts.pinterest?.link || "";
   for (const t of targets) {
     const own = String(opts.captions?.[t.platform] || "");
     let text = own || p.content;
     if (track) {
-      const ctx = { source_type: "social", source_id: p.id, platform: t.platform, profile_id: p.profile_id, campaign: brand };
+      const ctx = { source_type: "social", source_id: p.id, platform: t.platform, profile_id: p.profile_id, campaign: campaignTag || brand };
       text = await trackText(env, text, ctx);
       if (t.platform === "pinterest" && pinLink) pinLink = (await trackText(env, pinLink, ctx)).trim();
     }

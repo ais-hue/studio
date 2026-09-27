@@ -47,6 +47,7 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS brand_briefs ( profile_id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', voice TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT '', pillars TEXT NOT NULL DEFAULT '[]', dos TEXT NOT NULL DEFAULT '', donts TEXT NOT NULL DEFAULT '', hashtags TEXT NOT NULL DEFAULT '', links TEXT NOT NULL DEFAULT '[]', examples TEXT NOT NULL DEFAULT '', cadence TEXT NOT NULL DEFAULT '{}', pinterest_board TEXT NOT NULL DEFAULT '', producer_on INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL )",
  "CREATE TABLE IF NOT EXISTS draft_batches ( id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', profile_id TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, ready_at INTEGER )",
  "CREATE INDEX IF NOT EXISTS idx_batches_status ON draft_batches(status, created_at)",
+ "CREATE TABLE IF NOT EXISTS initiatives ( id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', name TEXT NOT NULL, tag TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '', target INTEGER, starts_at INTEGER, ends_at INTEGER, notes TEXT NOT NULL DEFAULT '', archived INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -68,4 +69,10 @@ export const ALTERS: string[] = [
  "ALTER TABLE social_posts ADD COLUMN origin TEXT",
  "ALTER TABLE social_posts ADD COLUMN note TEXT",
  "CREATE INDEX IF NOT EXISTS idx_social_batch ON social_posts(batch_id)",
+ "ALTER TABLE campaigns ADD COLUMN initiative_id TEXT",
+ "ALTER TABLE social_posts ADD COLUMN initiative_id TEXT",
+ "ALTER TABLE forms ADD COLUMN initiative_id TEXT",
+ "ALTER TABLE pages ADD COLUMN initiative_id TEXT",
+ "CREATE INDEX IF NOT EXISTS idx_campaigns_init ON campaigns(initiative_id)",
+ "CREATE INDEX IF NOT EXISTS idx_social_init ON social_posts(initiative_id)",
 ];

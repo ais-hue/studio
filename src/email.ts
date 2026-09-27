@@ -150,11 +150,11 @@ export async function processQueue(env: Env, max = 300): Promise<number> {
     let r;
     if (row.kind === "campaign" && row.campaign_id) {
       if (!campaigns.has(row.campaign_id)) {
-        campaigns.set(row.campaign_id, await env.DB.prepare(`SELECT cp.*, s.accent, s.name AS siteName FROM campaigns cp LEFT JOIN sites s ON s.id = cp.site_id WHERE cp.id = ?`).bind(row.campaign_id).first());
+        campaigns.set(row.campaign_id, await env.DB.prepare(`SELECT cp.*, s.accent, s.name AS siteName, i.tag AS initiativeTag FROM campaigns cp LEFT JOIN sites s ON s.id = cp.site_id LEFT JOIN initiatives i ON i.id = cp.initiative_id WHERE cp.id = ?`).bind(row.campaign_id).first());
       }
       const c = campaigns.get(row.campaign_id);
       if (!c) { skip.push(row.id); continue; }
-      r = renderEmail(env, settings, { subject: c.subject, preheader: c.preheader, body: c.body, accent: c.accent, siteName: c.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "", utmCampaign: c.name });
+      r = renderEmail(env, settings, { subject: c.subject, preheader: c.preheader, body: c.body, accent: c.accent, siteName: c.siteName, email: row.email, name: row.name || "", sendId: row.id, token: row.token || "", utmCampaign: (c as any).initiativeTag || c.name });
       out.push({ row, msg: { from: fromLine(settings, c.siteName), to: [row.email], subject: r.subject, html: r.html, text: r.text, headers: r.headers, ...(settings.reply_to ? { reply_to: settings.reply_to } : {}) } });
     } else if (row.kind === "welcome" && row.list_id) {
       if (!lists.has(row.list_id)) {

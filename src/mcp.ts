@@ -6,6 +6,7 @@ import { performance } from "./performance";
 import { linkStats } from "./links";
 import { VERSION } from "./version";
 import { finishBatch, getBrief, plannerContext, saveBrief, startBatch } from "./producer";
+import { createInitiative, findInitiative, initiativeDetail, listInitiatives, setInitiative } from "./initiatives";
 
 /*
  * Studio as an MCP server for Claude (Streamable HTTP, JSON responses, no sessions).
@@ -146,6 +147,7 @@ const TOOLS: Tool[] = [
         planned_for: { type: "string", description: "ISO date-time this post is meant to go out, ideally one of free_slots_next_days from get_brand_brief. Aisling sees it on the Review page; nothing is scheduled until she approves." },
         why: { type: "string", description: "One or two lines for Aisling: why this post, why now, and anything she needs to check or fill in." },
         batch_id: { type: "string", description: "From start_draft_batch, when drafting several posts in one go." },
+        campaign: { type: "string", description: "Campaign name or id (from list_campaigns) this post belongs to. Its links get the campaign's tracking tag." },
       },
     },
     run: async (env, a) => {
@@ -159,6 +161,7 @@ const TOOLS: Tool[] = [
         batch = s(a.batch_id, 40);
       }
       const planned = plannedMs(a.planned_for);
+      const camp = a.campaign ? await findInitiative(env, a.campaign) : null;
       const accounts = await listAccounts(env, b._id);
       const want: string[] = Array.isArray(a.platforms) && a.platforms.length ? a.platforms.map(normPlatform) : accounts.map((x) => x.platform);
       const missing = want.filter((p) => !accounts.some((x) => x.platform === p));
@@ -176,8 +179,9 @@ const TOOLS: Tool[] = [
       const pid = id("sp_"), t = now();
       await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, batch_id, planned_at, origin, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'claude', ?, ?, ?)")
         .bind(pid, b._id, String(a.caption || "").slice(0, 70000), JSON.stringify(media), JSON.stringify(targets), JSON.stringify(options), batch, planned, s(a.why, 600) || null, t, t).run();
+      if (camp) await setInitiative(env, "post", pid, camp.id);
       const p = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>())!;
-      return { saved_as: "draft", brand: b.name, ...postView(env, p), open_in_studio: await studioUrl(env, batch ? "review" : "social/p/" + pid),
+      return { saved_as: "draft", brand: b.name, campaign: camp?.name || null, ...postView(env, p), open_in_studio: await studioUrl(env, batch ? "review" : "social/p/" + pid),
         note: "Aisling reviews and posts or schedules it from Studio." + (problems(p).length ? " Some things are still needed before it can go out (see still_needed)." : "") };
     },
   },
@@ -381,9 +385,11 @@ const TOOLS: Tool[] = [
       preview_line: { type: "string", description: "Grey text shown after the subject in inboxes." },
       name: { type: "string", description: "Internal name only Aisling sees." },
       list: { type: "string", description: "List name or id. Leave out to address everyone subscribed." },
-      style_as_site: { type: "string", description: "Site name whose colour and name the email uses." } } },
+      style_as_site: { type: "string", description: "Site name whose colour and name the email uses." },
+      campaign: { type: "string", description: "Campaign name or id (from list_campaigns) this email belongs to." } } },
     run: async (env, a) => {
       let listId: string | null = null, siteId: string | null = null;
+      const camp = a.campaign ? await findInitiative(env, a.campaign) : null;
       if (a.list) {
         const l = await env.DB.prepare("SELECT id FROM lists WHERE id = ? OR lower(name) = lower(?)").bind(s(a.list, 80), s(a.list, 80)).first<{ id: string }>();
         if (!l) throw new HttpError(404, `No list called “${a.list}”. Use list_email_lists.`);
@@ -396,7 +402,50 @@ const TOOLS: Tool[] = [
       const cid = id("cp_"), t = now();
       await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(cid, s(a.name, 80) || s(a.subject, 80) || "Draft from Claude", s(a.subject, 150), s(a.preview_line, 200), String(a.body_markdown || "").slice(0, 50000), listId, siteId, t, t).run();
-      return { saved_as: "draft", id: cid, open_in_studio: await studioUrl(env, "emails/" + cid), note: "Aisling sends a test and sends or schedules it from Studio." };
+      if (camp) await setInitiative(env, "email", cid, camp.id);
+      return { saved_as: "draft", id: cid, campaign: camp?.name || null, open_in_studio: await studioUrl(env, "emails/" + cid), note: "Aisling sends a test and sends or schedules it from Studio." };
+    },
+  },
+  {
+    name: "list_campaigns", title: "List campaigns", readOnly: true,
+    description: "List Aisling's campaigns (a launch or push that groups emails, social posts, forms and pages): dates, goal, whether it's planning, live or finished, and what's in each.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { include_finished: { type: "boolean" } } },
+    run: async (env, a) => {
+      const list = await listInitiatives(env, false);
+      return { campaigns: list.filter((c) => a.include_finished || c.phase !== "done").map((c) => ({
+        id: c.id, name: c.name, status: c.phase, goal: c.goal || null, target_signups: c.target,
+        starts: c.starts_at ? new Date(c.starts_at).toISOString().slice(0, 10) : null, ends: c.ends_at ? new Date(c.ends_at).toISOString().slice(0, 10) : null,
+        emails: c.emails, posts: c.posts, forms: c.forms, pages: c.pages, notes: c.notes ? c.notes.slice(0, 600) : null })) };
+    },
+  },
+  {
+    name: "get_campaign", title: "How a campaign is doing", readOnly: true,
+    description: "One campaign's results and contents: sign-ups (against its target), link clicks, email opens and clicks, social interactions and reach, day-by-day numbers, and each email and post with its date and status.",
+    inputSchema: { type: "object", required: ["campaign"], additionalProperties: false, properties: { campaign: { type: "string", description: "Name or id." } } },
+    run: async (env, a) => {
+      const c = await findInitiative(env, a.campaign);
+      const d = await initiativeDetail(env, c.id);
+      return {
+        campaign: { name: d.campaign.name, status: d.campaign.phase, goal: d.campaign.goal, notes: d.campaign.notes, utm_campaign: d.campaign.tag,
+          starts: d.campaign.starts_at ? new Date(d.campaign.starts_at).toISOString().slice(0, 10) : null, ends: d.campaign.ends_at ? new Date(d.campaign.ends_at).toISOString().slice(0, 10) : null },
+        results: d.results,
+        days_with_activity: d.series.filter((x) => x.clicks || x.signups),
+        emails: d.emails.map((e) => ({ ...e, at: e.at ? new Date(e.at).toISOString() : null })),
+        posts: d.posts.map((p) => ({ ...p, at: p.at ? new Date(p.at).toISOString() : null })),
+        forms: d.forms, pages: (d.pages as any[]).map((p) => ({ page: `${p.subdomain}.${env.ROOT_DOMAIN}/${p.slug}`, views: p.views, published: !!p.published })),
+        open_in_studio: await studioUrl(env, "campaigns/" + c.id),
+      };
+    },
+  },
+  {
+    name: "create_campaign", title: "Create a campaign",
+    description: "Create a campaign to group a launch's emails and posts. Dates are YYYY-MM-DD. Nothing is sent or posted. Put the key messages, offer and links in notes so later drafts can use them.",
+    inputSchema: { type: "object", required: ["name"], additionalProperties: false, properties: {
+      name: { type: "string" }, starts: { type: "string" }, ends: { type: "string" }, goal: { type: "string" },
+      target_signups: { type: "integer", minimum: 1 }, notes: { type: "string" } } },
+    run: async (env, a) => {
+      const c = await createInitiative(env, { name: a.name, starts_at: a.starts || null, ends_at: a.ends || null, goal: a.goal, target: a.target_signups, notes: a.notes });
+      return { created: true, id: c.id, name: c.name, utm_campaign: c.tag, open_in_studio: await studioUrl(env, "campaigns/" + c.id), note: "Use campaign: \"" + c.name + "\" when drafting emails and posts for it." };
     },
   },
   {

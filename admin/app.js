@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609271105";
+var VERSION = "202609271620";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -118,6 +118,8 @@ function route(){
   else if(top==="social" && parts[1]==="p" && parts[2]) p=socialPostView(parts[2]);
   else if(top==="social" && parts[1]==="b" && parts[2] && parts[3]==="brief") p=briefView(parts[2]);
   else if(top==="review") p=reviewView();
+  else if(top==="campaigns" && parts[1]) p=campaignView(parts[1]);
+  else if(top==="campaigns") p=campaignsView();
   else if(top==="social") p=socialView(parts[1]==="b"?parts[2]:null);
   else if(top==="settings") p=settingsView();
   else p=Promise.resolve(v.innerHTML='<div class="empty"><b>Page not found</b><a href="#/">Go to the overview</a></div>');
@@ -645,7 +647,7 @@ function formView(fid, tab){
     var f=r[0].form, goBase=r[0].go, fields=r[1], lists=r[2].lists, sites=r[3].sites, v=$("#view");
     var fdef=function(k){ if(k==="name") return {key:"name",label:"Name",type:"text"}; return fields.filter(function(x){return x.key===k})[0] };
     var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/forms" style="color:inherit;text-decoration:none">Forms</a> · '+(f.status==="active"?"on":"off")+'</span><h1 id="fTitle">'+esc(f.name)+'</h1></div>'+
-      '<div class="actions"><button class="btn danger" type="button" id="fDel">Delete</button></div></div><div id="fConfirm"></div>';
+      '<div class="actions"><button class="btn danger" type="button" id="fDel">Delete</button></div></div><div id="fConfirm"></div><div id="campHost"></div>';
     html+='<div class="editor wide"><form class="form panel" id="fForm" autocomplete="off"><h2 class="sec">Form <span class="saving" id="fSave">Saved</span></h2>'+
       '<div class="actions"><button type="button" class="switch" role="switch" id="fOn" aria-checked="'+(f.status==="active")+'" aria-labelledby="fOnLbl"></button><span id="fOnLbl">'+(f.status==="active"?"On: taking sign-ups":"Off: not taking sign-ups")+'</span></div>'+
       '<div class="field"><label for="fName">Name</label><input type="text" id="fName" maxlength="80" value="'+esc(f.name)+'"><span class="hint">Only you see this.</span></div>'+
@@ -659,6 +661,7 @@ function formView(fid, tab){
       '<div class="field"><label for="fRedir">Or send them to a page</label><input type="text" id="fRedir" maxlength="500" value="'+esc(f.redirect_url)+'" placeholder="https://… (optional)"></div>'+
       '</form><div class="stack"><nav class="tabs" role="tablist">'+[["preview","Preview"],["embed","Use it"],["subs","Sign-ups"]].map(function(t){ return '<a role="tab" href="#/forms/'+esc(fid)+'/'+t[0]+'" aria-selected="'+(tab===t[0])+'">'+t[1]+'</a>' }).join("")+'</nav><div id="fTab"></div></div></div>';
     v.innerHTML=html;
+    campaignPicker($("#campHost"),"form",fid,f.initiative_id);
     var save=saver($("#fSave"), function(x){ return api("PATCH","forms/"+fid,x).then(function(rr){ f=rr.form; $("#fTitle").textContent=f.name; if(tab==="preview") showTab() }) });
     function drawFields(){
       var rows=[{key:"email",required:true,fixed:true}].concat(f.fields);
@@ -825,7 +828,7 @@ function emailView(cid){
     var listLabel=function(id){ if(id&&id.indexOf("seg:")===0){ var g=segs.filter(function(x){return "seg:"+x.id===id})[0]; return g? g.name+" (smart list)" : "a smart list" } var l=lists.filter(function(x){return x.id===id})[0]; return l? l.name : "Everyone subscribed" };
     var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/emails" style="color:inherit;text-decoration:none">Emails</a> · '+esc(cp.status)+'</span><h1 id="cpTitle">'+esc(cp.name)+'</h1><p class="sub"><span class="chip '+esc(cp.status)+'">'+esc(cp.status)+'</span> '+
       (cp.status==="scheduled" ? "Goes out "+fmtDate(cp.scheduled_at,true) : cp.sent_at ? "Sent "+fmtDate(cp.sent_at,true)+" to "+esc(listLabel(cp.list_id)) : "")+'</p></div>'+
-      '<div class="actions"><button class="btn" type="button" id="dupBtn">Duplicate</button>'+(cp.status!=="sending"?'<button class="btn danger" type="button" id="delBtn">Delete</button>':'')+'</div></div><div id="delConfirm"></div>';
+      '<div class="actions"><button class="btn" type="button" id="dupBtn">Duplicate</button>'+(cp.status!=="sending"?'<button class="btn danger" type="button" id="delBtn">Delete</button>':'')+'</div></div><div id="delConfirm"></div><div id="campHost"></div>';
     if(!editable){
       var sent=stats.sent||0;
       html+='<div class="stats"><div><b>'+sent+'</b><span>sent'+(stats.queued?' · '+stats.queued+' to go':'')+'</span></div><div><b>'+pct(stats.opened||0,sent)+'</b><span>opened ('+(stats.opened||0)+')</span></div><div><b>'+pct(stats.clicked||0,sent)+'</b><span>clicked ('+(stats.clicked||0)+')</span></div><div><b>'+(stats.bounced||0)+'</b><span>bounced'+(stats.complained?' · '+stats.complained+' spam':'')+'</span></div><div><b>'+(stats.failed||0)+'</b><span>failed</span></div></div>';
@@ -833,6 +836,7 @@ function emailView(cid){
       html+='<p class="hint">Opens are approximate: some email apps block the tracking image, others load it automatically.</p>';
       html+='<div class="proof email"><div class="proofbar"><span class="url">'+esc(cp.subject)+'</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div>';
       v.innerHTML=html;
+      campaignPicker($("#campHost"),"email",cid,cp.initiative_id);
       emailPreview($("#pv"),{subject:cp.subject, preheader:cp.preheader, body:cp.body, site_id:cp.site_id});
       if(cp.status==="sending"){ var poll=setInterval(function(){ route() },5000); S.cleanup.push(function(){ clearInterval(poll) }) }
       var rb=$("#retryBtn"); if(rb) rb.onclick=function(){ api("POST","campaigns/"+cid+"/retry").then(function(){ toast("Retrying"); route() }).catch(function(e){ toast(e.message,true) }) };
@@ -851,6 +855,7 @@ function emailView(cid){
         '<div id="sendConfirm"></div></form>'+
         '<div class="proof email"><div class="proofbar"><span class="url">inbox view</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div></div>';
       v.innerHTML=html;
+      campaignPicker($("#campHost"),"email",cid,cp.initiative_id);
       imageButton($("#cpBody"), $("#cpBody").nextElementSibling);
       var showAudience=function(n){ audience=n; var val=$("#cpList").value||null; $("#audience").textContent = "Goes to "+n+" subscribed "+(n===1?"person":"people")+" "+(val&&val.indexOf("seg:")===0?"in":"on")+" “"+listLabel(val)+"”"+(val&&val.indexOf("seg:")===0?", counted again at the moment it sends":"")+". Unsubscribed people are always left out." };
       showAudience(audience);
@@ -1065,13 +1070,16 @@ function calendarView(){
     var monthName=first.toLocaleDateString(undefined,{month:"long",year:"numeric"});
     var html=head("Plan","Calendar","Every scheduled post and email in one place. Drag a scheduled item to another day to move it.",
       '<div class="seg" role="group" aria-label="Month"><button type="button" id="calPrev" aria-label="Previous month">‹</button><button type="button" id="calToday">Today</button><button type="button" id="calNext" aria-label="Next month">›</button></div>');
-    html+='<div class="calwrap"><section class="panel cal"><h2 class="sec">'+esc(monthName)+' <span class="legend"><span><i class="k-social"></i>Social</span><span><i class="k-email"></i>Email</span></span></h2>'+
+    html+='<div class="calwrap"><section class="panel cal"><h2 class="sec">'+esc(monthName)+' <span class="legend"><span><i class="k-social"></i>Social</span><span><i class="k-email"></i>Email</span>'+((d.campaigns||[]).length?'<span><i class="k-camp"></i>Campaign</span>':'')+'</span></h2>'+
       '<div class="calgrid" role="grid">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(function(x){ return '<div class="calhd" role="columnheader">'+x+'</div>' }).join("");
     var today=dayKey(now);
     for(var i=0;i<42;i++){
       var day=new Date(start); day.setDate(start.getDate()+i);
       var k=dayKey(day), items=byDay[k]||[], out=day.getMonth()!==first.getMonth(), past=day<new Date(now.getFullYear(),now.getMonth(),now.getDate());
+      var dayUtc=Date.UTC(day.getFullYear(),day.getMonth(),day.getDate()), isoDay=new Date(dayUtc).toISOString().slice(0,10);
+      var running=(d.campaigns||[]).filter(function(c){ return c.starts_at<dayUtc+864e5 && (c.ends_at||c.starts_at)>=dayUtc });
       html+='<div class="calday'+(out?" out":"")+(k===today?" today":"")+(past?" past":"")+'" role="gridcell" data-day="'+day.getTime()+'"><span class="dn">'+day.getDate()+'<span class="dw">'+day.toLocaleDateString(undefined,{weekday:"short"})+'</span></span>'+
+        running.map(function(c){ var first=i%7===0||new Date(c.starts_at).toISOString().slice(0,10)===isoDay; return '<a class="calcamp" href="#/campaigns/'+esc(c.id)+'" title="'+esc(c.name)+'">'+(first?esc(c.name):"&nbsp;")+'</a>' }).join("")+
         items.map(function(it){ return '<a class="calit k-'+it.type+' st-'+esc(it.status)+'" href="'+esc(it.href)+'"'+(it.movable?' draggable="true" data-move="'+esc(it.type)+':'+esc(it.id)+':'+it.at+'"':'')+' title="'+esc(it.title+" · "+it.sub)+'"><b>'+fmtTime(it.at)+'</b> '+esc(it.title)+'</a>' }).join("")+'</div>';
     }
     html+='</div></section><aside class="stack"><section class="panel"><h2 class="sec">Drafts <span class="hint">'+d.drafts.length+'</span></h2>'+
@@ -1480,7 +1488,7 @@ function socialPostView(pid){
       var where=function(){ return sel().map(platName).join(", ") };
       var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/social/b/'+esc(brand._id)+'" style="color:inherit;text-decoration:none">Social · '+esc(brand.name)+'</a></span><h1>'+(editable?"Write a post":esc(SOCIAL_STATUS[p.status]||p.status))+'</h1>'+
         '<p class="sub">'+socialChip(p.status)+' '+(p.status==="scheduled"?"Goes out "+fmtDate(p.scheduled_at,true):p.published_at?"Went out "+fmtDate(p.published_at,true):"")+'</p></div>'+
-        '<div class="actions"><button class="btn" type="button" id="spDup">Duplicate</button><button class="btn danger" type="button" id="spDel">Delete</button></div></div><div id="spConfirm"></div>';
+        '<div class="actions"><button class="btn" type="button" id="spDup">Duplicate</button><button class="btn danger" type="button" id="spDel">Delete</button></div></div><div id="spConfirm"></div><div id="campHost"></div>';
       if(p.error && editable) html+='<div class="notice danger"><p>Last try didn’t go out: '+esc(p.error)+'</p></div>';
       if(editable && (p.note||p.planned_at)) html+='<div class="notice"><p>'+(p.note?'<b>Claude:</b> '+esc(p.note)+' ':'')+(p.planned_at?'Planned for <b>'+fmtDate(p.planned_at,true)+'</b>.':'')+'</p>'+(p.origin==="claude"?'<a class="btn sm" href="#/review">Back to review</a>':'')+'</div>';
       if(!editable){
@@ -1494,6 +1502,7 @@ function socialPostView(pid){
         if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
         html+='</div><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
         v.innerHTML=html;
+        campaignPicker($("#campHost"),"post",pid,p.initiative_id);
         renderPreview();
         var us=$("#spUnsched"); if(us) us.onclick=function(){ api("POST","social/posts/"+pid+"/unschedule").then(function(){ toast("Back to draft"); route() }).catch(function(e){ toast(e.message,true) }) };
         if($("#spLinks")) api("GET","links/stats?post="+encodeURIComponent(pid)+"&days=365").then(function(d){ var h=$("#spLinks"); if(!h) return;
@@ -1524,6 +1533,7 @@ function socialPostView(pid){
         '<div class="actions"><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto" value="'+esc(p.planned_at&&p.planned_at>Date.now()+180000?localInput(p.planned_at):"")+'"><button class="btn" type="button" id="spSched">Schedule for this time</button></div><p class="hint" id="spQHint"></p><div id="spSend"></div>'+
         '</form><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
       v.innerHTML=html;
+      campaignPicker($("#campHost"),"post",pid,p.initiative_id);
 
       var save=saver($("#spSave"), function(x){ return api("PATCH","social/posts/"+pid,x).then(function(res){ p.problems=res.post.problems; showProblems() }) });
       p.options.captions=p.options.captions||{};
@@ -1649,6 +1659,141 @@ function socialPostView(pid){
         $("#sdY").onclick=function(){ api("DELETE","social/posts/"+pid).then(function(){ toast("Deleted"); go("#/social/b/"+p.profile_id) }).catch(function(e){ toast(e.message,true) }) };
       };
     });
+  });
+}
+
+/* ============ campaigns ============ */
+var PHASE={planning:"Planning", live:"Live", done:"Finished", archived:"Archived"};
+function phaseChip(p){ var cls=p==="live"?"live":p==="planning"?"scheduled":p==="done"?"sent":"off"; return '<span class="chip '+cls+'">'+esc(PHASE[p]||p)+'</span>' }
+function dateRange(a,b){ if(!a&&!b) return "No dates yet"; var f=function(ms){ return new Date(ms).toLocaleDateString(undefined,{day:"numeric",month:"short",year:new Date(ms).getFullYear()!==new Date().getFullYear()?"numeric":undefined}) }; return a&&b ? f(a)+" – "+f(b) : a ? "From "+f(a) : "Until "+f(b) }
+function dayInput(ms){ return ms ? new Date(ms).toISOString().slice(0,10) : "" }
+
+/* Small "Campaign" picker used in the email, post and form editors. */
+function campaignPicker(host, kind, itemId, current){
+  if(!host) return;
+  api("GET","initiatives").then(function(d){
+    var list=d.campaigns;
+    if(current && !list.some(function(c){return c.id===current})) list=list.concat([{id:current, name:"(archived campaign)"}]);
+    if(!list.length && !current){ host.innerHTML='<p class="camppick hint">Part of a launch? <a href="#/campaigns">Make a campaign</a> to see everything for it in one place.</p>'; return }
+    host.innerHTML='<div class="camppick"><label for="cmpSel">Campaign</label><select id="cmpSel" style="width:auto;min-width:200px"><option value="">None</option>'+list.map(function(c){ return '<option value="'+esc(c.id)+'"'+(c.id===current?" selected":"")+'>'+esc(c.name)+'</option>' }).join("")+'</select><a id="cmpOpen" class="btn sm ghost" href="#/campaigns/'+esc(current||"")+'"'+(current?"":" hidden")+'>Open campaign</a></div>';
+    $("#cmpSel",host).onchange=function(){ var val=this.value||null;
+      api("POST","initiatives/assign",{kind:kind, id:itemId, initiative_id:val}).then(function(){ current=val; var o=$("#cmpOpen",host); o.hidden=!val; if(val) o.href="#/campaigns/"+val; toast(val?"Added to "+list.filter(function(c){return c.id===val})[0].name:"Taken out of the campaign") }).catch(function(e){ toast(e.message,true) }) };
+  }).catch(function(){ host.innerHTML="" });
+}
+
+function campaignsView(){
+  return api("GET","initiatives?all=1").then(function(d){
+    var v=$("#view"), list=d.campaigns;
+    var html=head("Marketing","Campaigns","A launch or a push: its emails, posts, forms and pages together, and what they added up to.",'<button class="btn primary" type="button" id="newCamp">New campaign</button>');
+    html+='<div id="ncHost"></div>';
+    if(!list.length) html+='<div class="empty"><b>No campaigns yet</b>Make one for your next launch, like “Cipherly autumn”, then add the emails and posts for it. Studio adds up the clicks and sign-ups.</div>';
+    var groups=[["Live",function(c){return c.phase==="live"}],["Planning",function(c){return c.phase==="planning"}],["Finished",function(c){return c.phase==="done"}],["Archived",function(c){return c.phase==="archived"}]];
+    groups.forEach(function(g){ var l=list.filter(g[1]); if(!l.length) return;
+      html+='<section class="panel"><h2 class="sec">'+g[0]+' <span class="hint">'+l.length+'</span></h2><div class="rows">'+l.map(function(c){
+        var bits=[c.emails?c.emails+" email"+(c.emails===1?"":"s"):"", c.posts?c.posts+" post"+(c.posts===1?"":"s"):"", c.forms?c.forms+" form"+(c.forms===1?"":"s"):"", c.pages?c.pages+" page"+(c.pages===1?"":"s"):""].filter(Boolean).join(" · ")||"Nothing in it yet";
+        return '<a class="rowi nosq" href="#/campaigns/'+esc(c.id)+'"><span class="t">'+esc(c.name)+'<small>'+esc(dateRange(c.starts_at,c.ends_at))+' · '+esc(bits)+'</small></span><span class="meta">'+(c.clicks?'<span class="num">'+c.clicks+' click'+(c.clicks===1?"":"s")+'</span>':'')+phaseChip(c.phase)+'</span></a>' }).join("")+'</div></section>' });
+    v.innerHTML=html;
+    $("#newCamp").onclick=function(){
+      $("#ncHost").innerHTML='<form class="sheet" id="ncForm"><h3>New campaign</h3><div class="field"><label for="ncName">Name</label><input type="text" id="ncName" required maxlength="80" placeholder="e.g. Cipherly autumn"></div>'+
+        '<div class="fieldrow"><div class="field"><label for="ncStart">Starts</label><input type="date" id="ncStart"></div><div class="field"><label for="ncEnd">Ends</label><input type="date" id="ncEnd"></div><div class="field"><label for="ncTarget">Sign-ups to aim for</label><input type="number" id="ncTarget" min="0" placeholder="optional"></div></div>'+
+        '<div class="field"><label for="ncGoal">Goal</label><input type="text" id="ncGoal" maxlength="500" placeholder="e.g. 200 new players before Halloween"></div>'+
+        '<div class="actions"><button class="btn primary" type="submit">Create campaign</button><button class="btn ghost" type="button" id="ncCancel">Cancel</button></div></form>';
+      $("#ncName").focus(); $("#ncCancel").onclick=function(){ $("#ncHost").innerHTML="" };
+      $("#ncForm").onsubmit=function(e){ e.preventDefault(); var b=this.querySelector("[type=submit]"); b.disabled=true;
+        api("POST","initiatives",{name:$("#ncName").value, starts_at:$("#ncStart").value||null, ends_at:$("#ncEnd").value||null, target:$("#ncTarget").value||null, goal:$("#ncGoal").value})
+          .then(function(r){ go("#/campaigns/"+r.campaign.id) }).catch(function(err){ b.disabled=false; toast(err.message,true) }) };
+    };
+  });
+}
+
+function campChart(series, startMs, endMs){
+  var W=560,H=170,pad=24,n=series.length, bw=(W-pad)/Math.max(1,n);
+  var max=Math.max(4, Math.max.apply(null, series.map(function(d){ return Math.max(d.clicks,d.signups) })));
+  var step=max<=4?1:max<=10?2:Math.ceil(max/4), top=Math.ceil(max/step)*step, y=function(v){ return 10+(H-36)*(1-v/top) };
+  var s='<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Clicks and sign-ups per day">';
+  for(var g=0; g<=top; g+=step) s+='<line class="grid" x1="'+pad+'" x2="'+W+'" y1="'+y(g)+'" y2="'+y(g)+'"/><text x="'+(pad-6)+'" y="'+(y(g)+3)+'" text-anchor="end">'+g+'</text>';
+  var idx=function(ms){ if(!ms) return -1; var k=new Date(ms).toISOString().slice(0,10); for(var i=0;i<n;i++) if(series[i].day===k) return i; return -1 };
+  var a=idx(startMs), b=idx(endMs);
+  if(a>-1||b>-1){ var x0=pad+(a>-1?a:0)*bw, x1=pad+((b>-1?b:n-1)+1)*bw; s+='<rect class="window" x="'+x0+'" y="10" width="'+Math.max(1,x1-x0)+'" height="'+(y(0)-10)+'"><title>Campaign dates</title></rect>' }
+  series.forEach(function(d,i){ var x=pad+i*bw;
+    if(d.clicks) s+='<rect class="bar" x="'+(x+1)+'" y="'+y(d.clicks)+'" width="'+Math.max(1.5,bw-2)+'" height="'+(y(0)-y(d.clicks))+'"><title>'+d.day+': '+d.clicks+' click'+(d.clicks===1?"":"s")+'</title></rect>';
+    if(d.signups) s+='<rect class="sig" x="'+(x+bw/2-3)+'" y="'+(y(d.signups)-3)+'" width="6" height="6"><title>'+d.day+': '+d.signups+' sign-up'+(d.signups===1?"":"s")+'</title></rect>';
+  });
+  s+='<line class="axis" x1="'+pad+'" x2="'+W+'" y1="'+y(0)+'" y2="'+y(0)+'"/>';
+  var lab=function(k){ return new Date(k+"T12:00:00Z").toLocaleDateString(undefined,{day:"numeric",month:"short"}) };
+  if(n) s+='<text x="'+pad+'" y="'+(H-8)+'">'+lab(series[0].day)+'</text><text x="'+W+'" y="'+(H-8)+'" text-anchor="end">'+lab(series[n-1].day)+'</text>';
+  return s+'</svg><p class="clegend"><span class="lg bar"></span>Link clicks <span class="lg sig"></span>Sign-ups <span class="lg window"></span>Campaign dates</p>';
+}
+
+function campaignView(iid){
+  return api("GET","initiatives/"+iid).then(function(d){
+    var v=$("#view"), c=d.campaign, r=d.results;
+    var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/campaigns" style="color:inherit;text-decoration:none">Campaigns</a></span><h1 id="icTitle">'+esc(c.name)+'</h1><p class="sub">'+phaseChip(c.phase)+' '+esc(dateRange(c.starts_at,c.ends_at))+(c.goal?' · '+esc(c.goal):'')+'</p></div>'+
+      '<div class="actions"><button class="btn" type="button" id="icNewEmail">New email</button><button class="btn" type="button" id="icNewPost">New post</button></div></div><div id="icBrand"></div>';
+    var tgt=r.target? Math.min(100,Math.round(100*r.signups/r.target)) : null;
+    html+='<section class="figures" aria-label="Results">'+
+      '<div class="fig"><span>Sign-ups</span><b>'+r.signups+(r.target?'<em class="of"> / '+r.target+'</em>':'')+'</b>'+(tgt!==null?'<i class="meter" aria-hidden="true"><i style="width:'+tgt+'%"></i></i>':'')+'<small>'+(r.target?tgt+'% of the goal':'from its posts, forms and pages')+'</small></div>'+
+      '<div class="fig"><span>Clicks</span><b>'+r.clicks.toLocaleString()+'</b><small>'+r.social_clicks+' from posts · '+r.email_clicks+' from emails</small></div>'+
+      '<div class="fig"><span>Emails</span><b>'+r.emails_sent.toLocaleString()+'</b><small>'+(r.emails_sent?'sent · '+r.open_rate+'% opened':'none sent yet')+'</small></div>'+
+      '<div class="fig"><span>Social</span><b>'+r.engagement.toLocaleString()+'</b><small>'+(r.posts_out?'interactions on '+r.posts_out+' post'+(r.posts_out===1?"":"s")+(r.reach?' · '+r.reach.toLocaleString()+' seen':''):'no posts out yet')+'</small></div></section>';
+    html+='<div class="grid2"><div class="stack">'+
+      '<section class="panel"><h2 class="sec">Day by day</h2><div class="pad">'+campChart(d.series, c.starts_at, c.ends_at)+'</div></section>'+
+      '<section class="panel"><h2 class="sec">Emails and posts <span class="hint">in date order</span></h2>'+(d.timeline.length?'<div class="rows">'+d.timeline.map(function(x){
+        var when=x.at?fmtDate(x.at,true):"No date yet", st=x.state==="planned"?"draft":x.state;
+        return '<div class="rowi nosq tl"><span class="t"><a href="'+esc(x.href)+'">'+esc(x.title||"Untitled")+'</a><small>'+(x.type==="email"?"Email":"Post"+(x.sub?" · "+esc(x.sub):""))+' · '+esc(when)+(x.state==="planned"?" (planned)":"")+'</small></span><span class="meta"><span class="chip '+esc(st)+'">'+esc(x.type==="post"?(SOCIAL_STATUS[st]||st):st)+'</span><button type="button" class="btn sm ghost" data-out="'+x.type+'|'+esc(x.id)+'" aria-label="Take out of the campaign">Remove</button></span></div>' }).join("")+'</div>'
+        : '<div class="empty">No emails or posts yet. Start one with the buttons above, or add ones you’ve already made below.</div>')+'</section>'+
+      (d.emails.some(function(e){return e.sent})?'<section class="panel"><h2 class="sec">Email results</h2><div class="tablewrap"><table><thead><tr><th>Email</th><th class="r">Sent</th><th class="r">Opened</th><th class="r">Clicked</th></tr></thead><tbody>'+d.emails.filter(function(e){return e.sent}).map(function(e){ return '<tr><td><a href="#/emails/'+esc(e.id)+'">'+esc(e.subject||e.name)+'</a></td><td class="r mono">'+e.sent+'</td><td class="r mono">'+pct(e.opened,e.sent)+'</td><td class="r mono">'+pct(e.clicked,e.sent)+'</td></tr>' }).join("")+'</tbody></table></div></section>':'')+
+      (d.posts.some(function(p){return p.when==="posted"})?'<section class="panel"><h2 class="sec">Post results</h2><div class="tablewrap"><table><thead><tr><th>Post</th><th class="r">Seen</th><th class="r">Interactions</th><th class="r">Clicks</th></tr></thead><tbody>'+d.posts.filter(function(p){return p.when==="posted"}).sort(function(a,b){return b.engagement-a.engagement}).map(function(p){ return '<tr><td><a href="#/social/p/'+esc(p.id)+'">'+esc(p.title)+'</a><span class="sub">'+esc(p.platforms.join(", "))+'</span></td><td class="r mono">'+(p.reach?p.reach.toLocaleString():"—")+'</td><td class="r mono">'+p.engagement+'</td><td class="r mono">'+p.clicks+'</td></tr>' }).join("")+'</tbody></table></div></section>':'')+
+      '</div><div class="stack">'+
+      '<section class="panel"><h2 class="sec">Details <span class="saving" id="icSave">Saved</span></h2><div class="pad stack" style="gap:14px">'+
+        '<div class="field"><label for="icName">Name</label><input type="text" id="icName" maxlength="80" value="'+esc(c.name)+'"></div>'+
+        '<div class="fieldrow"><div class="field"><label for="icStart">Starts</label><input type="date" id="icStart" value="'+dayInput(c.starts_at)+'"></div><div class="field"><label for="icEnd">Ends</label><input type="date" id="icEnd" value="'+dayInput(c.ends_at)+'"></div></div>'+
+        '<div class="fieldrow"><div class="field"><label for="icGoal">Goal</label><input type="text" id="icGoal" maxlength="500" value="'+esc(c.goal)+'"></div><div class="field"><label for="icTarget">Sign-ups to aim for</label><input type="number" id="icTarget" min="0" value="'+(c.target||"")+'"></div></div>'+
+        '<div class="field"><label for="icNotes">Notes</label><textarea id="icNotes" style="min-height:110px" placeholder="Key messages, the offer, links, anything Claude should know when drafting for it.">'+esc(c.notes)+'</textarea></div>'+
+        '<p class="hint" style="margin:0">Links in its emails and posts are tagged <span class="mono">utm_campaign='+esc(c.tag)+'</span>.</p></div></section>'+
+      '<section class="panel"><h2 class="sec">Forms and pages</h2>'+
+        ((d.forms.length||d.pages.length)?'<div class="rows">'+
+          d.forms.map(function(f){ return '<div class="rowi nosq tl"><span class="t"><a href="#/forms/'+esc(f.id)+'">'+esc(f.name)+'</a><small>Form · '+f.submissions+' sign-up'+(f.submissions===1?"":"s")+'</small></span><span class="meta"><button type="button" class="btn sm ghost" data-out="form|'+esc(f.id)+'">Remove</button></span></div>' }).join("")+
+          d.pages.map(function(p){ return '<div class="rowi nosq tl"><span class="t"><a href="#/sites/'+esc(p.site_id)+'/pages/'+esc(p.id)+'">'+esc(p.site_name)+' / '+esc(p.slug||"home")+'</a><small>Page · '+p.views+' view'+(p.views===1?"":"s")+(p.published?"":" · not published")+'</small></span><span class="meta"><button type="button" class="btn sm ghost" data-out="page|'+esc(p.id)+'">Remove</button></span></div>' }).join("")+'</div>'
+          : '<div class="empty">Add the sign-up form or landing page for this campaign, and its sign-ups count here.</div>')+'</section>'+
+      '<section class="panel"><h2 class="sec">Add something you’ve already made</h2><div class="pad stack" style="gap:10px"><div class="fieldrow"><div class="field"><label for="icKind">What</label><select id="icKind"><option value="email">Email</option><option value="post">Social post</option><option value="form">Form</option><option value="page">Page</option></select></div><div class="field"><label for="icItem">Which</label><select id="icItem"><option value="">Loading…</option></select></div></div><div class="actions"><button class="btn sm" type="button" id="icAdd">Add to campaign</button></div></div></section>'+
+      '<div class="actions"><button class="btn" type="button" id="icArchive">'+(c.archived?"Unarchive":"Archive")+'</button><button class="btn danger" type="button" id="icDel">Delete campaign</button></div><div id="icConfirm"></div>'+
+      '</div></div>';
+    v.innerHTML=html;
+    var save=saver($("#icSave"), function(x){ return api("PATCH","initiatives/"+iid,x).then(function(res){ $("#icTitle").textContent=res.campaign.name }) });
+    $("#icName").oninput=function(){ save({name:this.value}) };
+    $("#icGoal").oninput=function(){ save({goal:this.value}) };
+    $("#icTarget").oninput=function(){ save({target:this.value||null}) };
+    $("#icNotes").oninput=function(){ save({notes:this.value}) };
+    $("#icStart").onchange=function(){ save({starts_at:this.value||null}); save.now() };
+    $("#icEnd").onchange=function(){ save({ends_at:this.value||null}); save.now() };
+    $$("[data-out]").forEach(function(b){ b.onclick=function(){ var p=b.dataset.out.split("|"); b.disabled=true;
+      api("POST","initiatives/assign",{kind:p[0], id:p[1], initiative_id:null}).then(function(){ toast("Taken out of the campaign"); route() }).catch(function(e){ b.disabled=false; toast(e.message,true) }) } });
+    var opts=null;
+    function fillItems(){ var k=$("#icKind").value, s=$("#icItem"); if(!opts){ s.innerHTML='<option value="">Loading…</option>'; return }
+      var l=opts[k].filter(function(x){ return x.initiative_id!==iid });
+      s.innerHTML=l.length? l.map(function(x){ return '<option value="'+esc(x.id)+'">'+esc(x.title||"Untitled")+(x.initiative_id?" (in another campaign)":"")+'</option>' }).join("") : '<option value="">Nothing to add</option>' }
+    api("GET","initiatives/options").then(function(o){ opts=o; fillItems() }).catch(function(){});
+    $("#icKind").onchange=fillItems;
+    $("#icAdd").onclick=function(){ var id=$("#icItem").value, k=$("#icKind").value; if(!id) return; this.disabled=true;
+      api("POST","initiatives/assign",{kind:k, id:id, initiative_id:iid}).then(function(){ toast("Added"); route() }).catch(function(e){ $("#icAdd").disabled=false; toast(e.message,true) }) };
+    $("#icNewEmail").onclick=function(){ this.disabled=true; api("POST","campaigns",{name:c.name, initiative_id:iid}).then(function(x){ go("#/emails/"+x.campaign.id) }).catch(function(e){ toast(e.message,true) }) };
+    $("#icNewPost").onclick=function(){ var btn=this;
+      loadSocialMeta().then(function(meta){ if(!meta.connected){ toast("Connect social posting in Settings first.",true); return }
+        return api("GET","social/brands").then(function(bd){
+          var start=function(brand){ btn.disabled=true; return api("GET","social/brands/"+brand._id+"/accounts").then(function(a){ return api("POST","social/posts",{profile_id:brand._id, initiative_id:iid, targets:a.accounts.map(function(x){ return {platform:x.platform, accountId:x._id} })}) }).then(function(x){ go("#/social/p/"+x.post.id) }) };
+          if(bd.brands.length===1) return start(bd.brands[0]);
+          if(!bd.brands.length){ toast("Add a brand on the Social page first.",true); return }
+          $("#icBrand").innerHTML='<div class="confirm"><span>Which brand is it for?</span>'+bd.brands.map(function(b){ return '<button class="btn sm" type="button" data-br="'+esc(b._id)+'">'+esc(b.name)+'</button>' }).join("")+'<button class="btn sm ghost" type="button" id="brNo">Cancel</button></div>';
+          $("#brNo").onclick=function(){ $("#icBrand").innerHTML="" };
+          $$("[data-br]").forEach(function(x){ x.onclick=function(){ start(bd.brands.filter(function(b){return b._id===x.dataset.br})[0]) } });
+        }) }).catch(function(e){ btn.disabled=false; toast(e.message,true) }) };
+    $("#icArchive").onclick=function(){ api("PATCH","initiatives/"+iid,{archived:!c.archived}).then(function(){ toast(c.archived?"Unarchived":"Archived"); route() }).catch(function(e){ toast(e.message,true) }) };
+    $("#icDel").onclick=function(){
+      $("#icConfirm").innerHTML='<div class="confirm"><span>Delete this campaign? Its emails, posts, forms and pages stay; they just stop being grouped.</span><button class="btn sm danger" type="button" id="icDY">Delete</button><button class="btn sm ghost" type="button" id="icDN">Keep it</button></div>';
+      $("#icDN").onclick=function(){ $("#icConfirm").innerHTML="" };
+      $("#icDY").onclick=function(){ api("DELETE","initiatives/"+iid).then(function(){ toast("Campaign deleted"); go("#/campaigns") }).catch(function(e){ toast(e.message,true) }) };
+    };
   });
 }
 

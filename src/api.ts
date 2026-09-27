@@ -10,6 +10,7 @@ import { FIELD_TYPES, loadForm } from "./forms";
 import { cleanRules, compileRules, segmentWhere } from "./segments";
 import { performance, syncMetrics } from "./performance";
 import { getBrief, reviewQueue, saveBrief, tidyBatches } from "./producer";
+import { Kind, createInitiative, deleteInitiative, initiativeDetail, listInitiatives, setInitiative, updateInitiative } from "./initiatives";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
@@ -512,6 +513,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const cid = id("cp_");
       await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, site_id, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)")
         .bind(cid, str(d.name, 80) || "Untitled email", str(d.subject, 150), "Hi {{name}},\n\nWrite your email here.\n\nAisling", d.list_id || null, d.site_id || null, t, t).run();
+      if (d.initiative_id) await setInitiative(env, "email", cid, str(d.initiative_id, 40));
       return json({ campaign: await getCampaign(env, cid) }, 201);
     }
     if (b && !c && m === "GET") {
@@ -580,8 +582,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b && c === "duplicate" && m === "POST") {
       const cp = await getCampaign(env, b);
       const cid = id("cp_");
-      await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, segment_id, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(cid, `${cp.name} (copy)`.slice(0, 80), cp.subject, cp.preheader, cp.body, cp.list_id, cp.segment_id || null, cp.site_id, t, t).run();
+      await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, segment_id, site_id, initiative_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(cid, `${cp.name} (copy)`.slice(0, 80), cp.subject, cp.preheader, cp.body, cp.list_id, cp.segment_id || null, cp.site_id, (cp as any).initiative_id || null, t, t).run();
       return json({ campaign: await getCampaign(env, cid) }, 201);
     }
   }
@@ -781,7 +783,9 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         sub: [bname(p.profile_id), JSON.parse(p.targets || "[]").map((x: any) => PLATFORMS[x.platform]?.name || x.platform).join(", ")].filter(Boolean).join(" · "),
         status: p.status, movable: p.status === "scheduled", href: "#/social/p/" + p.id })),
     ].sort((x, y) => x.at - y.at);
-    return json({ items, drafts: drafts.map((p) => ({ id: p.id, title: first(p.content) || "Untitled post", brand: bname(p.profile_id), profile_id: p.profile_id,
+    const running = (await env.DB.prepare(`SELECT id, name, starts_at, ends_at FROM initiatives WHERE archived = 0 AND starts_at IS NOT NULL
+      AND starts_at <= ? AND COALESCE(ends_at, starts_at) + 86400000 >= ? ORDER BY starts_at LIMIT 8`).bind(to, from).all<any>()).results;
+    return json({ campaigns: running, items, drafts: drafts.map((p) => ({ id: p.id, title: first(p.content) || "Untitled post", brand: bname(p.profile_id), profile_id: p.profile_id,
       sub: JSON.parse(p.targets || "[]").map((x: any) => PLATFORMS[x.platform]?.name || x.platform).join(", "), href: "#/social/p/" + p.id })) });
   }
 
@@ -895,6 +899,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         const targets = Array.isArray(d.targets) ? d.targets.slice(0, 10).map((x: any) => ({ platform: str(x.platform, 20), accountId: str(x.accountId, 80) })) : [];
         await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, targets, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
           .bind(pid, brand, str(d.content, 5000), JSON.stringify(targets), t, t).run();
+        if (d.initiative_id) await setInitiative(env, "post", pid, str(d.initiative_id, 40));
         return json({ post: view(await get(pid)) }, 201);
       }
       if (s2 && !s3 && m === "GET") {
@@ -947,11 +952,35 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       if (s2 && s3 === "duplicate" && m === "POST") {
         const p = await get(s2);
         const pid = id("sp_");
-        await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-          .bind(pid, p.profile_id, p.content, p.media, p.targets, p.options, t, t).run();
+        await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, initiative_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .bind(pid, p.profile_id, p.content, p.media, p.targets, p.options, (p as any).initiative_id || null, t, t).run();
         return json({ post: view(await get(pid)) }, 201);
       }
     }
+  }
+
+  /* ---------- campaigns (initiatives) ---------- */
+  if (a === "initiatives") {
+    if (!b && m === "GET") return json({ campaigns: await listInitiatives(env, url.searchParams.get("all") === "1") });
+    if (!b && m === "POST") return json({ campaign: await createInitiative(env, await body(req)) }, 201);
+    if (b === "assign" && m === "POST") {
+      const d = await body(req);
+      await setInitiative(env, str(d.kind, 10) as Kind, str(d.id, 60), d.initiative_id ? str(d.initiative_id, 40) : null);
+      return json({ ok: true });
+    }
+    if (b === "options" && m === "GET") {
+      // Things that could be added to a campaign, for the "Add existing" picker.
+      const [em, po, fo, pg] = await env.DB.batch([
+        env.DB.prepare("SELECT id, COALESCE(NULLIF(subject,''), name) AS title, status, initiative_id FROM campaigns ORDER BY updated_at DESC LIMIT 100"),
+        env.DB.prepare("SELECT id, content, status, initiative_id FROM social_posts ORDER BY updated_at DESC LIMIT 100"),
+        env.DB.prepare("SELECT id, name AS title, status, initiative_id FROM forms ORDER BY name"),
+        env.DB.prepare("SELECT pg.id, s.name || ' / ' || CASE pg.slug WHEN '' THEN 'home' ELSE pg.slug END AS title, CASE pg.published WHEN 1 THEN 'live' ELSE 'draft' END AS status, pg.initiative_id FROM pages pg JOIN sites s ON s.id = pg.site_id ORDER BY s.name, pg.slug"),
+      ]);
+      return json({ email: em.results, post: (po.results as any[]).map((p) => ({ id: p.id, title: String(p.content || "").split("\n")[0].slice(0, 100) || "Picture post", status: p.status, initiative_id: p.initiative_id })), form: fo.results, page: pg.results });
+    }
+    if (b && !c && m === "GET") return json(await initiativeDetail(env, b));
+    if (b && !c && m === "PATCH") return json({ campaign: await updateInitiative(env, b, await body(req)) });
+    if (b && !c && m === "DELETE") { await deleteInitiative(env, b); return json({ ok: true }); }
   }
 
   /* ---------- review (drafts from Claude) ---------- */

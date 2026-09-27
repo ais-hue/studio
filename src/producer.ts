@@ -4,6 +4,7 @@ import { performance } from "./performance";
 import { linkStats } from "./links";
 import { fileUrl } from "./files";
 import { sendTransactional } from "./email";
+import { runningInitiatives } from "./initiatives";
 
 /*
  * The producer. Each brand has a brief (voice, audience, themes, cadence). Claude reads the brief plus
@@ -96,6 +97,7 @@ export async function plannerContext(env: Env, profileId: string, brandName: str
     what_works: perf ? { best_time: perf.best, per_platform: perf.totals, enough_data: perf.enough } : null,
     link_clicks_and_signups_90_days: links,
     unused_media_in_brand_folder: (unused.results as any[]).map((f) => ({ file_id: f.id, name: f.name, kind: f.kind, description: f.alt, size: f.width ? `${f.width}x${f.height}` : null, url: fileUrl(env, f.key) })),
+    campaigns_running: await runningInitiatives(env, t, until),
     pinterest_boards: boards,
     rules: [
       "Only draft for connected platforms, and roughly match the cadence in the brief.",
@@ -103,6 +105,7 @@ export async function plannerContext(env: Env, profileId: string, brandName: str
       "Instagram, TikTok and Pinterest need an image or video: use unused_media_in_brand_folder, or skip those platforms for that post.",
       "Don't invent facts, prices, dates, quotes or offers. If something needs Aisling's input, say so in `why`.",
       "Keep to each platform's character limit; use platform_captions when a platform needs a different version.",
+      "If a campaign in campaigns_running fits, make some posts for it and pass its name as campaign. Use its notes for the message; don't invent offers.",
     ],
   };
 }
