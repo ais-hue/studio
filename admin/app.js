@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270340";
+var VERSION = "202609271105";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -64,6 +64,7 @@ $("#themeBtn").addEventListener("click", function(){ applyTheme(currentTheme()==
 
 /* ============ sidebar ============ */
 function refreshNav(){
+  api("GET","review/count").then(function(d){ var el=$("#navReview"); if(el) el.textContent=d.n||"" }).catch(function(){});
   return Promise.all([api("GET","sites"), api("GET","overview"), api("GET","campaigns"), api("GET","sequences")]).then(function(r){
     S.sites=r[0].sites;
     $("#navSites").innerHTML=r[0].sites.map(function(s){ return '<a class="site" href="#/sites/'+esc(s.id)+'" data-site="'+esc(s.id)+'" style="--sw:var(--s-'+esc(s.accent)+')"><i></i><span>'+esc(s.name)+'</span></a>' }).join("");
@@ -115,6 +116,8 @@ function route(){
   else if(top==="automations") p=automationsView();
   else if(top==="files") p=filesView(parts[1]===undefined?null:(parts[1]==="_"?"":decodeURIComponent(parts[1])));
   else if(top==="social" && parts[1]==="p" && parts[2]) p=socialPostView(parts[2]);
+  else if(top==="social" && parts[1]==="b" && parts[2] && parts[3]==="brief") p=briefView(parts[2]);
+  else if(top==="review") p=reviewView();
   else if(top==="social") p=socialView(parts[1]==="b"?parts[2]:null);
   else if(top==="settings") p=settingsView();
   else p=Promise.resolve(v.innerHTML='<div class="empty"><b>Page not found</b><a href="#/">Go to the overview</a></div>');
@@ -1420,7 +1423,7 @@ function socialView(brandParam){
         var byPlat={}; accounts.forEach(function(a){ byPlat[a.platform]=a });
         var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>');
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
-        html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
+        html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="briefBtn">Brief for Claude</button><button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
         html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. First 2 free, then $6/month each on Zernio.</span></h2><div class="plats">'+
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
@@ -1442,6 +1445,7 @@ function socialView(brandParam){
           var tc=0, ts=0; d.platforms.forEach(function(x){ tc+=x.clicks; ts+=x.signups });
           h.innerHTML='<section class="panel"><h2 class="sec">Last 30 days <span class="hint">'+tc+' clicks · '+ts+' sign-ups from '+esc(brand.name)+' posts</span></h2><div class="plats">'+d.platforms.map(function(x){ return '<div class="plat"><span class="pn">'+esc(platName(x.platform))+'</span><span class="pu">'+x.clicks+' click'+(x.clicks===1?"":"s")+' · '+x.signups+' sign-up'+(x.signups===1?"":"s")+'</span></div>' }).join("")+'</div></section>' }).catch(function(){});
         $("#newPost").onclick=function(){ this.disabled=true; api("POST","social/posts",{profile_id:brand._id, targets:accounts.map(function(a){ return {platform:a.platform, accountId:a._id} })}).then(function(r){ go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
+        $("#briefBtn").onclick=function(){ go("#/social/b/"+brand._id+"/brief") };
         $("#renameBrand").onclick=function(){
           $("#brandHost").innerHTML='<form class="sheet" id="rbForm"><div class="field"><label for="rbName">Rename '+esc(brand.name)+'</label><input type="text" id="rbName" required maxlength="60" value="'+esc(brand.name)+'"></div><div class="actions"><button class="btn primary sm" type="submit">Save name</button><button class="btn ghost sm" type="button" id="rbCancel">Cancel</button></div></form>';
           var i=$("#rbName"); i.focus(); i.select(); $("#rbCancel").onclick=function(){ $("#brandHost").innerHTML="" };
@@ -1478,6 +1482,7 @@ function socialPostView(pid){
         '<p class="sub">'+socialChip(p.status)+' '+(p.status==="scheduled"?"Goes out "+fmtDate(p.scheduled_at,true):p.published_at?"Went out "+fmtDate(p.published_at,true):"")+'</p></div>'+
         '<div class="actions"><button class="btn" type="button" id="spDup">Duplicate</button><button class="btn danger" type="button" id="spDel">Delete</button></div></div><div id="spConfirm"></div>';
       if(p.error && editable) html+='<div class="notice danger"><p>Last try didn’t go out: '+esc(p.error)+'</p></div>';
+      if(editable && (p.note||p.planned_at)) html+='<div class="notice"><p>'+(p.note?'<b>Claude:</b> '+esc(p.note)+' ':'')+(p.planned_at?'Planned for <b>'+fmtDate(p.planned_at,true)+'</b>.':'')+'</p>'+(p.origin==="claude"?'<a class="btn sm" href="#/review">Back to review</a>':'')+'</div>';
       if(!editable){
         html+='<div class="editor"><div class="stack">';
         if(p.status==="scheduled") html+='<div class="notice"><p>Scheduled for <b>'+fmtDate(p.scheduled_at,true)+'</b>. To change the words or pictures, pull it back to a draft first.</p><button class="btn sm" type="button" id="spUnsched">Unschedule</button></div>'+
@@ -1516,7 +1521,7 @@ function socialPostView(pid){
         '<div id="spExtras" class="stack" style="gap:14px"></div>'+
         '<h2 class="sec">Send</h2><ul class="probs" id="spProbs"></ul>'+
         '<div class="actions"><button class="btn primary" type="button" id="spQueue" disabled>Add to queue</button><button class="btn" type="button" id="spNow">Post now</button></div>'+
-        '<div class="actions"><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto"><button class="btn" type="button" id="spSched">Schedule for this time</button></div><p class="hint" id="spQHint"></p><div id="spSend"></div>'+
+        '<div class="actions"><label class="sr" for="spAt">Schedule for</label><input type="datetime-local" id="spAt" style="width:auto" value="'+esc(p.planned_at&&p.planned_at>Date.now()+180000?localInput(p.planned_at):"")+'"><button class="btn" type="button" id="spSched">Schedule for this time</button></div><p class="hint" id="spQHint"></p><div id="spSend"></div>'+
         '</form><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
       v.innerHTML=html;
 
@@ -1644,6 +1649,110 @@ function socialPostView(pid){
         $("#sdY").onclick=function(){ api("DELETE","social/posts/"+pid).then(function(){ toast("Deleted"); go("#/social/b/"+p.profile_id) }).catch(function(e){ toast(e.message,true) }) };
       };
     });
+  });
+}
+
+/* ============ review (drafts Claude made) ============ */
+function localInput(ms){ if(!ms) return ""; var d=new Date(ms-new Date(ms).getTimezoneOffset()*60000); return d.toISOString().slice(0,16) }
+function reviewView(){
+  return loadSocialMeta().then(function(){ return api("GET","review") }).then(function(d){
+    var v=$("#view"), posts=d.posts, byBatch={};
+    posts.forEach(function(p){ var k=p.batch_id||"_"; (byBatch[k]=byBatch[k]||[]).push(p) });
+    var ready=posts.filter(function(p){ return !p.problems.length });
+    var html=head("Marketing","Review","Posts Claude drafted for you. Nothing goes out until you approve it.",
+      ready.length?'<button class="btn primary" type="button" id="rvAll">'+allLabel()+'</button>':'');
+    function allLabel(){ return ready.length===1?"Approve the 1 ready post":"Approve all "+ready.length+" ready" }
+    html+='<div id="rvConfirm"></div>';
+    if(!posts.length){
+      var open=d.batches.filter(function(b){return b.status==="open"});
+      html+='<div class="empty"><b>'+(open.length?"Claude is still drafting":"Nothing to review")+'</b>'+(open.length?esc(open[0].brand||"")+' drafts will appear here when they’re done.':'When Claude drafts posts for you, they land here. Turn on the weekly producer in a brand’s brief on the <a href="#/social">Social</a> page.')+'</div>';
+      v.innerHTML=html; return;
+    }
+    var groups=d.batches.filter(function(b){ return byBatch[b.id] }).map(function(b){ return {b:b, list:byBatch[b.id]} });
+    if(byBatch._) groups.push({b:{title:"Other drafts from Claude", brand:""}, list:byBatch._});
+    groups.forEach(function(g){
+      html+='<section class="panel"><h2 class="sec">'+esc(g.b.title)+(g.b.brand?' <span class="hint">'+esc(g.b.brand)+' · '+g.list.length+' draft'+(g.list.length===1?"":"s")+(g.b.status==="open"?' · Claude is still adding to this':'')+'</span>':'')+'</h2>'+
+        (g.b.summary?'<p class="rvsum">'+esc(g.b.summary)+'</p>':'')+'<div class="rvlist">'+g.list.map(card).join("")+'</div></section>';
+    });
+    v.innerHTML=html;
+    function card(p){
+      var plats=p.targets.map(function(t){return platName(t.platform)}).join(", ")||"No accounts picked";
+      var m=p.media.slice(0,4).map(function(x){ return x.type==="video"?'<video src="'+esc(x.url)+'" muted playsinline preload="metadata"></video>':'<img src="'+esc(x.url)+'" alt="" loading="lazy">' }).join("");
+      var bad=p.problems.length;
+      return '<article class="rv" id="rv-'+esc(p.id)+'">'+
+        '<div class="rvmeta"><span class="eyebrow">'+esc(plats)+'</span>'+
+          '<label class="sr" for="rt-'+esc(p.id)+'">Planned time</label><input type="datetime-local" id="rt-'+esc(p.id)+'" data-when="'+esc(p.id)+'" value="'+esc(localInput(p.planned_at))+'" style="width:auto">'+
+          (p.planned_at?'':'<span class="hint">No time yet: approving uses the next posting slot.</span>')+'</div>'+
+        '<div class="rvbody">'+(m?'<div class="rvmedia">'+m+'</div>':'')+'<p class="ptext">'+esc(p.content||"")+'</p></div>'+
+        (p.note?'<p class="rvnote"><b>Claude:</b> '+esc(p.note)+'</p>':'')+
+        (bad?'<ul class="probs">'+p.problems.map(function(x){return '<li>'+esc(x)+'</li>'}).join("")+'</ul>':'')+
+        '<div class="actions">'+(bad?'<a class="btn primary sm" href="#/social/p/'+esc(p.id)+'">Finish in the editor</a>':'<button class="btn primary sm" type="button" data-ok="'+esc(p.id)+'">Approve</button><a class="btn sm" href="#/social/p/'+esc(p.id)+'">Edit</a>')+
+          '<button class="btn sm ghost" type="button" data-bin="'+esc(p.id)+'">Bin</button></div></article>';
+    }
+    function gone(id){ var el=$("#rv-"+id); if(el) el.remove(); ready=ready.filter(function(p){ return p.id!==id }); var a=$("#rvAll"); if(a){ if(ready.length) a.textContent=allLabel(); else a.remove() } refreshNav() }
+    function approve(ids, btn){
+      if(btn) btn.disabled=true;
+      return api("POST","review/approve",{ids:ids}).then(function(r){
+        r.done.forEach(function(x){ gone(x.id) });
+        if(r.done.length) toast(r.done.length===1?"Scheduled for "+fmtDate(r.done[0].at,true):r.done.length+" posts scheduled");
+        r.failed.forEach(function(x){ toast(x.error,true) });
+        if(!$$(".rv").length) route();
+      }).catch(function(e){ if(btn) btn.disabled=false; toast(e.message,true) });
+    }
+    $$("[data-ok]").forEach(function(b){ b.onclick=function(){ approve([b.dataset.ok], b) } });
+    $$("[data-bin]").forEach(function(b){ b.onclick=function(){ b.disabled=true; api("POST","review/bin",{ids:[b.dataset.bin]}).then(function(){ gone(b.dataset.bin); toast("Binned"); if(!$$(".rv").length) route() }).catch(function(e){ b.disabled=false; toast(e.message,true) }) } });
+    $$("[data-when]").forEach(function(i){ i.onchange=function(){ var ms=i.value?new Date(i.value).getTime():0;
+      if(ms && ms<Date.now()+5*60000){ toast("Pick a time in the future.",true); return }
+      api("PATCH","social/posts/"+i.dataset.when,{planned_at:ms}).then(function(){ toast(ms?"Planned for "+fmtDate(ms,true):"Time cleared") }).catch(function(e){ toast(e.message,true) }) } });
+    var all=$("#rvAll"); if(all) all.onclick=function(){
+      $("#rvConfirm").innerHTML='<div class="confirm"><span>Schedule all '+ready.length+' ready posts at their planned times? Drafts that still need something stay here.</span><button class="btn sm primary" type="button" id="raY">Approve all</button><button class="btn sm ghost" type="button" id="raN">Not yet</button></div>';
+      $("#raN").onclick=function(){ $("#rvConfirm").innerHTML="" };
+      $("#raY").onclick=function(){ this.disabled=true; approve(ready.map(function(p){return p.id})).then(function(){ $("#rvConfirm").innerHTML="" }) };
+    };
+  });
+}
+
+/* ============ brand brief (what Claude writes from) ============ */
+function briefView(bid){
+  return loadSocialMeta().then(function(){ return Promise.all([api("GET","social/brands"), api("GET","social/brands/"+bid+"/brief"), api("GET","social/brands/"+bid+"/accounts")]) }).then(function(r){
+    var brand=r[0].brands.filter(function(b){return b._id===bid})[0]||{_id:bid,name:"Brand"}, b=r[1].brief, accounts=r[2].accounts;
+    var v=$("#view"), pin=accounts.filter(function(a){return a.platform==="pinterest"})[0];
+    var ta=function(id, label, hint, val, rows){ return '<div class="field"><label for="'+id+'">'+label+'</label>'+(hint?'<span class="hint">'+hint+'</span>':'')+'<textarea id="'+id+'" style="min-height:'+(rows||90)+'px">'+esc(val||"")+'</textarea></div>' };
+    var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/social/b/'+esc(bid)+'" style="color:inherit;text-decoration:none">Social · '+esc(brand.name)+'</a></span><h1>Brief</h1><p class="sub">What Claude reads before drafting '+esc(brand.name)+' posts. Plain words are fine.</p></div><div class="actions"><span class="saving" id="brSave">'+(b.updated_at?"Saved":"")+'</span></div></div>';
+    html+='<div class="editor wide"><form class="form panel" id="brForm" autocomplete="off"><div class="pad stack" style="gap:16px">'+
+      '<label class="check"><input type="checkbox" id="brOn"'+(b.producer_on?" checked":"")+'> <span><b>Draft next week’s posts every Monday</b><br><span class="hint">Claude drafts into the free posting slots and emails you. Nothing goes out until you approve it on the Review page.</span></span></label>'+
+      ta("brVoice","Voice","How "+esc(brand.name)+" sounds. Calm? Cheeky? First person?",b.voice,110)+
+      ta("brAud","Audience","Who it’s for, and what they care about.",b.audience)+
+      ta("brPil","Themes","One per line. Claude rotates through them.",b.pillars.join("\n"))+
+      '<div class="fieldrow">'+ta("brDo","Always","",b.dos)+ta("brDont","Never","e.g. no emoji, no “game-changer”, no made-up offers.",b.donts)+'</div>'+
+      ta("brTags","Hashtags","",b.hashtags,60)+
+      '<div class="field"><span class="label">Links posts can point to</span><div id="brLinks" class="stack" style="gap:8px"></div><div class="actions"><button class="btn sm" type="button" id="brAddLink">Add a link</button></div></div>'+
+      ta("brEx","Example posts","Paste a few captions that sound right. Claude copies the feel, not the words.",b.examples,150)+
+      '</div></form><div class="stack"><section class="panel"><h2 class="sec">Posts per week</h2><div class="pad stack" style="gap:10px">'+
+        (accounts.length?accounts.map(function(a){ return '<div class="fieldrow" style="align-items:center"><label for="cd-'+esc(a.platform)+'">'+esc(platName(a.platform))+'</label><input type="number" min="0" max="21" id="cd-'+esc(a.platform)+'" data-cad="'+esc(a.platform)+'" value="'+(b.cadence[a.platform]||0)+'" style="width:90px"></div>' }).join(""):'<p class="hint" style="margin:0">Connect accounts on the <a href="#/social/b/'+esc(bid)+'">Social page</a> first.</p>')+
+        '<p class="hint" style="margin:0">Claude only uses your posting times, so add enough of them for this.</p></div></section>'+
+        (pin?'<section class="panel"><h2 class="sec">Pinterest</h2><div class="pad"><div class="field"><label for="brBoard">Board for new pins</label><select id="brBoard"><option value="">Loading…</option></select></div></div></section>':'')+
+        '<section class="panel"><h2 class="sec">Ask Claude</h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">In Claude, with Studio connected, try:</p><p style="margin:0">“Read the '+esc(brand.name)+' brief in Studio and draft next week’s posts.”</p><p style="margin:0">“Look at my last 20 '+esc(brand.name)+' posts and fill in the brief.”</p></div></section></div></div>';
+    v.innerHTML=html;
+    var links=(b.links||[]).slice();
+    var save=saver($("#brSave"), function(x){ return api("PUT","social/brands/"+bid+"/brief",x) });
+    function drawLinks(){
+      $("#brLinks").innerHTML=links.map(function(l,i){ return '<div class="fieldrow" style="grid-template-columns:1fr 2fr auto;align-items:center"><input type="text" data-ll="'+i+'" placeholder="Label, e.g. App Store" maxlength="80" value="'+esc(l.label)+'" aria-label="Link label"><input type="text" data-lu="'+i+'" placeholder="https://" maxlength="500" value="'+esc(l.url)+'" aria-label="Link"><button class="btn sm ghost" type="button" data-lrm="'+i+'">Remove</button></div>' }).join("");
+      $$("[data-ll]").forEach(function(i){ i.oninput=function(){ links[i.dataset.ll].label=i.value; pushLinks() } });
+      $$("[data-lu]").forEach(function(i){ i.oninput=function(){ links[i.dataset.lu].url=i.value.trim(); pushLinks() } });
+      $$("[data-lrm]").forEach(function(x){ x.onclick=function(){ links.splice(Number(x.dataset.lrm),1); drawLinks(); pushLinks(); save.now() } });
+    }
+    function pushLinks(){ save({links:links.filter(function(l){ return /^https:\/\//.test(l.url) })}) }
+    drawLinks();
+    $("#brAddLink").onclick=function(){ links.push({label:"",url:""}); drawLinks(); var el=$('[data-ll="'+(links.length-1)+'"]'); if(el) el.focus() };
+    [["brVoice","voice"],["brAud","audience"],["brDo","dos"],["brDont","donts"],["brTags","hashtags"],["brEx","examples"]].forEach(function(x){ $("#"+x[0]).oninput=function(){ var o={}; o[x[1]]=this.value; save(o) } });
+    $("#brPil").oninput=function(){ save({pillars:this.value.split("\n").map(function(s){return s.trim()}).filter(Boolean)}) };
+    $("#brOn").onchange=function(){ save({producer_on:this.checked}); save.now(); toast(this.checked?"Claude will draft "+brand.name+" posts every Monday":"Weekly drafts off") };
+    $$("[data-cad]").forEach(function(i){ i.oninput=function(){ var c={}; $$("[data-cad]").forEach(function(j){ var n=Number(j.value)||0; if(n) c[j.dataset.cad]=n }); save({cadence:c}) } });
+    if(pin){
+      api("GET","social/accounts/"+pin._id+"/boards").then(function(d){ var s=$("#brBoard"); if(!s) return; s.innerHTML='<option value="">Ask each time</option>'+d.boards.map(function(x){ return '<option value="'+esc(x.id)+'"'+(b.pinterest_board===x.id?" selected":"")+'>'+esc(x.name)+'</option>' }).join("") }).catch(function(){ var s=$("#brBoard"); if(s) s.innerHTML='<option value="">Couldn’t load boards</option>' });
+      $("#brBoard").onchange=function(){ save({pinterest_board:this.value}); save.now() };
+    }
   });
 }
 

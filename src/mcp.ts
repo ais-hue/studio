@@ -5,6 +5,7 @@ import { createUploadLink, uploadLinkStatus } from "./uploads";
 import { performance } from "./performance";
 import { linkStats } from "./links";
 import { VERSION } from "./version";
+import { finishBatch, getBrief, plannerContext, saveBrief, startBatch } from "./producer";
 
 /*
  * Studio as an MCP server for Claude (Streamable HTTP, JSON responses, no sessions).
@@ -89,6 +90,15 @@ function b64bytes(data: string): Uint8Array {
 
 const TYPE_BY_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", svg: "image/svg+xml", pdf: "application/pdf", mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg" };
 
+function plannedMs(v: unknown): number | null {
+  const str = s(v, 60);
+  if (!str) return null;
+  const ms = Date.parse(str);
+  if (!Number.isFinite(ms)) throw new HttpError(400, `planned_for isn’t a date-time: ${str}. Use ISO format, like 2026-10-05T09:30:00+02:00.`);
+  if (ms < now() - 60_000) throw new HttpError(400, "planned_for is in the past. Pick a free slot from get_brand_brief.");
+  return ms;
+}
+
 function postView(env: Env, p: SocialPost) {
   const o = JSON.parse(p.options || "{}");
   return {
@@ -96,6 +106,8 @@ function postView(env: Env, p: SocialPost) {
     platforms: JSON.parse(p.targets || "[]").map((t: any) => PLATFORMS[t.platform]?.name || t.platform),
     media: JSON.parse(p.media || "[]").map((m: any) => m.name || m.url),
     scheduled_for: p.scheduled_at && p.status === "scheduled" ? new Date(p.scheduled_at).toISOString() : null,
+    planned_for: (p as any).planned_at && p.status === "draft" ? new Date((p as any).planned_at).toISOString() : null,
+    why: (p as any).note || null,
     published_at: p.published_at ? new Date(p.published_at).toISOString() : null,
     still_needed: problems(p),
   };
@@ -131,10 +143,22 @@ const TOOLS: Tool[] = [
         image_urls: { type: "array", items: { type: "string" }, description: "https links to images to copy into Studio and attach." },
         pinterest_title: { type: "string" }, pinterest_link: { type: "string", description: "Where the pin should link to." },
         track_links: { type: "boolean", description: "Turn links into tracked links when posted. Default true." },
+        planned_for: { type: "string", description: "ISO date-time this post is meant to go out, ideally one of free_slots_next_days from get_brand_brief. Aisling sees it on the Review page; nothing is scheduled until she approves." },
+        why: { type: "string", description: "One or two lines for Aisling: why this post, why now, and anything she needs to check or fill in." },
+        batch_id: { type: "string", description: "From start_draft_batch, when drafting several posts in one go." },
       },
     },
     run: async (env, a) => {
       const b = await findBrand(env, a.brand);
+      let batch: string | null = null;
+      if (a.batch_id) {
+        const row = await env.DB.prepare("SELECT profile_id, status FROM draft_batches WHERE id = ?").bind(s(a.batch_id, 40)).first<{ profile_id: string; status: string }>();
+        if (!row) throw new HttpError(404, "No batch with that id. Call start_draft_batch first.");
+        if (row.profile_id !== b._id) throw new HttpError(400, "That batch belongs to a different brand.");
+        if (row.status !== "open") throw new HttpError(409, "That batch is already finished. Start a new one.");
+        batch = s(a.batch_id, 40);
+      }
+      const planned = plannedMs(a.planned_for);
       const accounts = await listAccounts(env, b._id);
       const want: string[] = Array.isArray(a.platforms) && a.platforms.length ? a.platforms.map(normPlatform) : accounts.map((x) => x.platform);
       const missing = want.filter((p) => !accounts.some((x) => x.platform === p));
@@ -145,11 +169,15 @@ const TOOLS: Tool[] = [
       const media = await mediaFromArgs(env, a, b.name);
       const options: any = { captions, track: a.track_links !== false };
       if (a.pinterest_title || a.pinterest_link) options.pinterest = { title: s(a.pinterest_title, 100), link: s(a.pinterest_link, 500) };
+      if (want.includes("pinterest")) {
+        const brief = await getBrief(env, b._id);
+        if (brief.pinterest_board) options.pinterest = { ...(options.pinterest || {}), boardId: brief.pinterest_board };
+      }
       const pid = id("sp_"), t = now();
-      await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(pid, b._id, String(a.caption || "").slice(0, 70000), JSON.stringify(media), JSON.stringify(targets), JSON.stringify(options), t, t).run();
+      await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, batch_id, planned_at, origin, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'claude', ?, ?, ?)")
+        .bind(pid, b._id, String(a.caption || "").slice(0, 70000), JSON.stringify(media), JSON.stringify(targets), JSON.stringify(options), batch, planned, s(a.why, 600) || null, t, t).run();
       const p = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>())!;
-      return { saved_as: "draft", brand: b.name, ...postView(env, p), open_in_studio: await studioUrl(env, "social/p/" + pid),
+      return { saved_as: "draft", brand: b.name, ...postView(env, p), open_in_studio: await studioUrl(env, batch ? "review" : "social/p/" + pid),
         note: "Aisling reviews and posts or schedules it from Studio." + (problems(p).length ? " Some things are still needed before it can go out (see still_needed)." : "") };
     },
   },
@@ -164,10 +192,12 @@ const TOOLS: Tool[] = [
         platform_captions: { type: "object", additionalProperties: { type: "string" }, description: "Replaces all per-platform captions. Use an empty string to clear one." },
         file_ids: { type: "array", items: { type: "string" }, description: "Replaces the attached media." },
         image_urls: { type: "array", items: { type: "string" } },
+        planned_for: { type: "string", description: "ISO date-time it's meant to go out. Empty string clears it." },
+        why: { type: "string", description: "Replaces the note Aisling sees on the Review page." },
       },
     },
     run: async (env, a) => {
-      const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(s(a.post_id, 80)).first<SocialPost>();
+      const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(s(a.post_id, 80)).first<SocialPost & { planned_at: number | null; note: string | null }>();
       if (!p) throw new HttpError(404, "No post with that id.");
       if (p.status !== "draft") throw new HttpError(409, `That post is ${p.status}, not a draft. Aisling can pull it back to a draft in Studio.`);
       const opts = JSON.parse(p.options || "{}");
@@ -187,10 +217,63 @@ const TOOLS: Tool[] = [
         const brands = await listProfiles(env).catch(() => []);
         media = JSON.stringify(await mediaFromArgs(env, a, brands.find((x) => x._id === p.profile_id)?.name || ""));
       }
-      await env.DB.prepare("UPDATE social_posts SET content = ?, targets = ?, media = ?, options = ?, updated_at = ? WHERE id = ?")
-        .bind(a.caption !== undefined ? String(a.caption).slice(0, 70000) : p.content, targets, media, JSON.stringify(opts), now(), p.id).run();
+      const planned = a.planned_for !== undefined ? plannedMs(a.planned_for) : p.planned_at;
+      await env.DB.prepare("UPDATE social_posts SET content = ?, targets = ?, media = ?, options = ?, planned_at = ?, note = ?, updated_at = ? WHERE id = ?")
+        .bind(a.caption !== undefined ? String(a.caption).slice(0, 70000) : p.content, targets, media, JSON.stringify(opts), planned, a.why !== undefined ? s(a.why, 600) || null : p.note, now(), p.id).run();
       const q = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(p.id).first<SocialPost>())!;
       return { ...postView(env, q), open_in_studio: await studioUrl(env, "social/p/" + p.id) };
+    },
+  },
+  {
+    name: "get_brand_brief", title: "Read a brand's brief and plan", readOnly: true,
+    description: "Everything needed to plan a brand's posts in one read: the brand brief (voice, audience, themes, do/don't, hashtags, links, example posts, posts per week per platform), connected platforms and character limits, free posting slots for the next two weeks, what's already scheduled, open drafts, recent posts with their numbers, what's working, link clicks and sign-ups, and unused photos and videos in the brand's folder. Call this before drafting more than one post. If brief.filled_in is false, ask Aisling about the brand (or draft from recent posts) and save it with update_brand_brief.",
+    inputSchema: { type: "object", required: ["brand"], additionalProperties: false, properties: {
+      brand: { type: "string", description: "Brand name or id from list_brands." },
+      days: { type: "integer", minimum: 3, maximum: 28, description: "How far ahead to look for free slots. Default 14." } } },
+    run: async (env, a) => {
+      const b = await findBrand(env, a.brand);
+      return plannerContext(env, b._id, b.name, Math.min(28, Math.max(3, Number(a.days) || 14)));
+    },
+  },
+  {
+    name: "update_brand_brief", title: "Update a brand brief",
+    description: "Save or change a brand's brief. Only the fields you pass are changed. Use this after Aisling tells you about a brand, or to note what she liked or didn't like in the examples. Does not post anything.",
+    inputSchema: { type: "object", required: ["brand"], additionalProperties: false, properties: {
+      brand: { type: "string" },
+      voice: { type: "string", description: "How the brand sounds." },
+      audience: { type: "string", description: "Who it's for and what they care about." },
+      pillars: { type: "array", items: { type: "string" }, description: "Content themes, up to 12." },
+      dos: { type: "string" }, donts: { type: "string" },
+      hashtags: { type: "string", description: "Hashtags to rotate through." },
+      links: { type: "array", items: { type: "object", properties: { label: { type: "string" }, url: { type: "string" } }, required: ["url"] }, description: "https links posts can point to (shop, app store, sign-up)." },
+      examples: { type: "string", description: "Captions that sound right." },
+      cadence: { type: "object", additionalProperties: { type: "integer" }, description: "Posts per week per platform key, e.g. {\"instagram\": 3, \"tiktok\": 2}." },
+    } },
+    run: async (env, a) => {
+      const b = await findBrand(env, a.brand);
+      const { brand: _b, ...rest } = a;
+      const brief = await saveBrief(env, b._id, rest);
+      return { saved: true, brand: b.name, brief, open_in_studio: await studioUrl(env, "social/b/" + b._id + "/brief") };
+    },
+  },
+  {
+    name: "start_draft_batch", title: "Start a batch of drafts",
+    description: "Start a batch before drafting several posts in one go (e.g. next week's posts). Pass its batch_id to create_social_draft for each post, then call finish_draft_batch so Aisling gets one email that drafts are waiting. Nothing is posted or scheduled.",
+    inputSchema: { type: "object", required: ["brand"], additionalProperties: false, properties: {
+      brand: { type: "string" }, title: { type: "string", description: "Short name, e.g. “Week of 6 October”." } } },
+    run: async (env, a) => {
+      const b = await findBrand(env, a.brand);
+      return { batch_id: await startBatch(env, b._id, s(a.title, 120) || "Drafts"), brand: b.name };
+    },
+  },
+  {
+    name: "finish_draft_batch", title: "Finish a batch of drafts",
+    description: "Mark a batch as ready. Studio emails Aisling that the drafts are waiting on her Review page, where she approves, edits or bins each one. Nothing is posted or scheduled by this.",
+    inputSchema: { type: "object", required: ["batch_id"], additionalProperties: false, properties: {
+      batch_id: { type: "string" }, summary: { type: "string", description: "Two or three lines: what this batch covers and anything she needs to decide." } } },
+    run: async (env, a) => {
+      const r = await finishBatch(env, s(a.batch_id, 40), s(a.summary, 2000));
+      return { ...r, review_in_studio: await studioUrl(env, "review"), note: r.drafts ? "Aisling approves each draft before anything goes out." : "The batch had no drafts, so nothing was sent." };
     },
   },
   {
@@ -372,7 +455,7 @@ async function handleOne(env: Env, msg: any): Promise<unknown | null> {
         protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: "studio", title: "Studio", version: VERSION },
-        instructions: "Studio is Aisling's marketing workspace. These tools read her brands, files, calendar and results, and save social posts and emails as drafts. Nothing is ever posted, scheduled or emailed from here: tell Aisling the draft is ready and give her the Studio link. Start with list_brands; check get_calendar and get_performance before planning several posts.",
+        instructions: "Studio is Aisling's marketing workspace. These tools read her brands, files, calendar and results, and save social posts and emails as drafts. Nothing is ever posted, scheduled or emailed from here: tell Aisling the draft is ready and give her the Studio link. Start with list_brands. To plan several posts: get_brand_brief, start_draft_batch, create_social_draft for each post (with planned_for from the free slots and a short why), then finish_draft_batch so Aisling reviews them together.",
       });
     }
     case "ping": return isNote ? null : rpcResult(msg.id, {});

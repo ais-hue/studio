@@ -9,6 +9,7 @@ import { linkStats } from "./links";
 import { FIELD_TYPES, loadForm } from "./forms";
 import { cleanRules, compileRules, segmentWhere } from "./segments";
 import { performance, syncMetrics } from "./performance";
+import { getBrief, reviewQueue, saveBrief, tidyBatches } from "./producer";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
@@ -865,6 +866,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('metrics_refreshed', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(String(t)).run();
       return json({ updated: await syncMetrics(env) });
     }
+    if (s1 === "brands" && s2 && s3 === "brief" && m === "GET") return json({ brief: await getBrief(env, s2) });
+    if (s1 === "brands" && s2 && s3 === "brief" && m === "PUT") return json({ brief: await saveBrief(env, s2, await body(req)) });
     if (s1 === "accounts" && s2 && !s3 && m === "DELETE") { await disconnect(env, s2); return json({ ok: true }); }
     if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
     if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2, str(url.searchParams.get("media"), 10)) });
@@ -909,7 +912,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         const media = d.media !== undefined ? JSON.stringify((Array.isArray(d.media) ? d.media : []).slice(0, 35).map((x: any) => ({ url: str(x.url, 1000), type: str(x.type, 10), name: str(x.name, 120) })).filter((x: any) => /^https:\/\//.test(x.url))) : p.media;
         const targets = d.targets !== undefined ? JSON.stringify((Array.isArray(d.targets) ? d.targets : []).slice(0, 10).map((x: any) => ({ platform: str(x.platform, 20), accountId: str(x.accountId, 80) })).filter((x: any) => PLATFORMS[x.platform] && x.accountId)) : p.targets;
         const options = d.options !== undefined ? JSON.stringify(d.options || {}).slice(0, 5000) : p.options;
-        await env.DB.prepare("UPDATE social_posts SET content = ?, media = ?, targets = ?, options = ?, updated_at = ? WHERE id = ?").bind(content, media, targets, options, t, p.id).run();
+        const planned = d.planned_at !== undefined ? (Number(d.planned_at) > 0 ? Number(d.planned_at) : null) : (p as any).planned_at ?? null;
+        await env.DB.prepare("UPDATE social_posts SET content = ?, media = ?, targets = ?, options = ?, planned_at = ?, updated_at = ? WHERE id = ?").bind(content, media, targets, options, planned, t, p.id).run();
         return json({ post: view(await get(p.id)) });
       }
       if (s2 && !s3 && m === "DELETE") {
@@ -947,6 +951,56 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
           .bind(pid, p.profile_id, p.content, p.media, p.targets, p.options, t, t).run();
         return json({ post: view(await get(pid)) }, 201);
       }
+    }
+  }
+
+  /* ---------- review (drafts from Claude) ---------- */
+  if (a === "review") {
+    const tz = (await getSettings(env)).timezone;
+    const approve = async (pid: string) => {
+      const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost & { planned_at: number | null }>();
+      if (!p) throw new HttpError(404, "That draft doesn’t exist any more.");
+      if (p.status !== "draft") throw new HttpError(409, "That post has already been approved.");
+      const issues = problems(p);
+      if (issues.length) throw new HttpError(400, issues[0]);
+      let at = p.planned_at && p.planned_at > t + 3 * 60_000 ? p.planned_at : await nextSlot(env, p.profile_id, tz);
+      if (!at) at = t + 15 * 60_000;
+      await publish(env, p, at);
+      return at;
+    };
+    if (!b && m === "GET") {
+      await tidyBatches(env);
+      const q = await reviewQueue(env);
+      let brands: Array<{ _id: string; name: string }> = [];
+      if (q.posts.length || q.batches.length) { try { brands = await brandsList(env); } catch { brands = []; } }
+      const bname = (pid: string) => brands.find((x) => x._id === pid)?.name || "";
+      return json({
+        timezone: tz,
+        batches: q.batches.map((x: any) => ({ ...x, brand: bname(x.profile_id) })),
+        posts: q.posts.map((p) => ({ ...p, brand: bname(p.profile_id), media: parseJson(p.media, []), targets: parseJson(p.targets, []), options: parseJson(p.options, {}), problems: problems(p) })),
+      });
+    }
+    if (b === "approve" && m === "POST") {
+      const d = await body(req);
+      const ids: string[] = Array.isArray(d.ids) ? d.ids.slice(0, 60).map((x: any) => str(x, 40)) : [];
+      const done: Array<{ id: string; at: number }> = [], failed: Array<{ id: string; error: string }> = [];
+      for (const pid of ids) {
+        try { done.push({ id: pid, at: await approve(pid) }); }
+        catch (e) { failed.push({ id: pid, error: e instanceof HttpError ? e.message : "Couldn’t schedule this one." }); }
+      }
+      await tidyBatches(env);
+      return json({ done, failed });
+    }
+    if (b === "bin" && m === "POST") {
+      const d = await body(req);
+      const ids: string[] = Array.isArray(d.ids) ? d.ids.slice(0, 60).map((x: any) => str(x, 40)) : [];
+      if (ids.length) await env.DB.batch(ids.map((pid) => env.DB.prepare("DELETE FROM social_posts WHERE id = ? AND status = 'draft'").bind(pid)));
+      await tidyBatches(env);
+      return json({ ok: true });
+    }
+    if (b === "count" && m === "GET") {
+      const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM social_posts WHERE status = 'draft' AND (batch_id IN (SELECT id FROM draft_batches WHERE status = 'ready') OR (origin = 'claude' AND batch_id IS NULL))`).first<{ n: number }>();
+      return json({ n: r?.n || 0 });
     }
   }
 

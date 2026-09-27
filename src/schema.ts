@@ -44,6 +44,9 @@ export const SCHEMA: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_subs_contact ON form_submissions(contact_id)",
  "CREATE INDEX IF NOT EXISTS idx_subs_ip ON form_submissions(ip_hash, created_at)",
  "CREATE TABLE IF NOT EXISTS segments ( id TEXT PRIMARY KEY, name TEXT NOT NULL, rules TEXT NOT NULL DEFAULT '{\"match\":\"all\",\"rules\":[]}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS brand_briefs ( profile_id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', voice TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT '', pillars TEXT NOT NULL DEFAULT '[]', dos TEXT NOT NULL DEFAULT '', donts TEXT NOT NULL DEFAULT '', hashtags TEXT NOT NULL DEFAULT '', links TEXT NOT NULL DEFAULT '[]', examples TEXT NOT NULL DEFAULT '', cadence TEXT NOT NULL DEFAULT '{}', pinterest_board TEXT NOT NULL DEFAULT '', producer_on INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS draft_batches ( id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', profile_id TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, ready_at INTEGER )",
+ "CREATE INDEX IF NOT EXISTS idx_batches_status ON draft_batches(status, created_at)",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -60,4 +63,9 @@ export const ALTERS: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_files_link ON files(upload_link)",
  "ALTER TABLE contacts ADD COLUMN props TEXT",
  "ALTER TABLE campaigns ADD COLUMN segment_id TEXT",
+ "ALTER TABLE social_posts ADD COLUMN batch_id TEXT",
+ "ALTER TABLE social_posts ADD COLUMN planned_at INTEGER",
+ "ALTER TABLE social_posts ADD COLUMN origin TEXT",
+ "ALTER TABLE social_posts ADD COLUMN note TEXT",
+ "CREATE INDEX IF NOT EXISTS idx_social_batch ON social_posts(batch_id)",
 ];
