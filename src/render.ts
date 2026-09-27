@@ -1,3 +1,4 @@
+import { formCss, renderFields } from "./forms";
 import { accentOf, esc, markdown } from "./util";
 
 export interface Site {
@@ -22,6 +23,7 @@ export interface RenderOpts {
   consentText: string;
   hasBlog: boolean;
   joined?: boolean | "confirm";
+  form?: import("./forms").PublicForm | null;  // a custom form chosen for this page
 }
 
 const fmtDate = (ms: number) =>
@@ -50,6 +52,16 @@ ${o.preview ? `<meta name="robots" content="noindex">` : ""}
 function signup(page: Page, c: Content, o: RenderOpts): string {
   if (c.form === false) return "";
   const cta = c.cta || "Keep me posted";
+  if (o.form) {
+    const msg = o.joined === "confirm" ? "Almost there. Check your inbox and tap the link to confirm." : o.joined ? esc(o.form.success) : "";
+    return `<style>${formCss("var(--pc, currentColor)")}.signup.sf{max-width:560px}.signup.sf .sf-btn{color:var(--bg,#fff)}</style>
+<form class="signup sf" method="post" action="/__proof/subscribe" data-proof-form${o.preview ? " data-preview" : ""}>
+  <input type="hidden" name="page" value="${esc(page.id)}"><input type="hidden" name="form" value="${esc(o.form.id)}">
+  ${renderFields(o.form, "sfp")}
+  <button class="sf-btn" type="submit">${esc(c.cta || o.form.button)}</button>
+  <div class="msg${o.joined ? " ok" : ""}" role="status" aria-live="polite">${msg}</div>
+</form>`;
+  }
   return `<form class="signup" method="post" action="/__proof/subscribe" data-proof-form${o.preview ? " data-preview" : ""}>
   <input type="hidden" name="page" value="${esc(page.id)}"><input type="hidden" name="sref" value="">
   <div class="hp" aria-hidden="true"><label>Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>

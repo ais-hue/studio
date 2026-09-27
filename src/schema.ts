@@ -37,6 +37,13 @@ export const SCHEMA: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_type, source_id)",
  "CREATE TABLE IF NOT EXISTS link_days ( link_id TEXT NOT NULL, day TEXT NOT NULL, clicks INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (link_id, day) )",
  "CREATE TABLE IF NOT EXISTS upload_links ( hash TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, folder TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', max_files INTEGER NOT NULL DEFAULT 10, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS contact_fields ( id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, label TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'text', options TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS forms ( id TEXT PRIMARY KEY, name TEXT NOT NULL, site_id TEXT, list_id TEXT, fields TEXT NOT NULL DEFAULT '[]', button TEXT NOT NULL DEFAULT 'Sign up', success TEXT NOT NULL DEFAULT 'Thanks, you’re on the list.', redirect_url TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS form_submissions ( id TEXT PRIMARY KEY, form_id TEXT NOT NULL, contact_id TEXT, data TEXT NOT NULL DEFAULT '{}', page_url TEXT NOT NULL DEFAULT '', ip_hash TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_subs_form ON form_submissions(form_id, created_at)",
+ "CREATE INDEX IF NOT EXISTS idx_subs_contact ON form_submissions(contact_id)",
+ "CREATE INDEX IF NOT EXISTS idx_subs_ip ON form_submissions(ip_hash, created_at)",
+ "CREATE TABLE IF NOT EXISTS segments ( id TEXT PRIMARY KEY, name TEXT NOT NULL, rules TEXT NOT NULL DEFAULT '{\"match\":\"all\",\"rules\":[]}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -51,4 +58,6 @@ export const ALTERS: string[] = [
  "ALTER TABLE social_posts ADD COLUMN metrics_at INTEGER",
  "ALTER TABLE files ADD COLUMN upload_link TEXT",
  "CREATE INDEX IF NOT EXISTS idx_files_link ON files(upload_link)",
+ "ALTER TABLE contacts ADD COLUMN props TEXT",
+ "ALTER TABLE campaigns ADD COLUMN segment_id TEXT",
 ];

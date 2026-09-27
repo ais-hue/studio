@@ -6,6 +6,8 @@ import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./autom
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
 import { linkStats } from "./links";
+import { FIELD_TYPES, loadForm } from "./forms";
+import { cleanRules, compileRules, segmentWhere } from "./segments";
 import { performance, syncMetrics } from "./performance";
 import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
@@ -88,7 +90,11 @@ async function campaignStats(env: Env, cid: string) {
     FROM sends WHERE campaign_id = ? AND kind = 'campaign'`).bind(cid).first();
 }
 
-async function audienceSize(env: Env, listId: string | null): Promise<number> {
+async function audienceSize(env: Env, listId: string | null, segmentId?: string | null): Promise<number> {
+  if (segmentId) {
+    const w = await segmentWhere(env, segmentId);
+    return (await env.DB.prepare(`SELECT COUNT(*) AS n FROM contacts c WHERE c.status = 'subscribed' AND ${w.sql}`).bind(...w.params).first<{ n: number }>())?.n || 0;
+  }
   const r = listId
     ? await env.DB.prepare("SELECT COUNT(*) AS n FROM contacts c JOIN list_members m ON m.contact_id = c.id WHERE m.list_id = ? AND c.status = 'subscribed'").bind(listId).first<{ n: number }>()
     : await env.DB.prepare("SELECT COUNT(*) AS n FROM contacts WHERE status = 'subscribed'").first<{ n: number }>();
@@ -215,7 +221,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       content: JSON.stringify(pg.content || {}), published: 1, created_at: pg.created_at || t, updated_at: t };
     const settings = await getSettings(env);
     const hasBlog = !!(await env.DB.prepare("SELECT 1 FROM pages WHERE site_id = ? AND template = 'post' AND published = 1").bind(site.id).first());
-    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, preview: true, consentText: settings.consent_text, hasBlog }),
+    const pform = pg.content?.form_id ? await loadForm(env, String(pg.content.form_id)) : null;
+    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
       { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
@@ -231,9 +238,11 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       if (q) { where.push("(c.email LIKE ? OR c.name LIKE ?)"); vals.push(`%${q}%`, `%${q}%`); }
       if (status) { where.push("c.status = ?"); vals.push(status); }
       if (list) { where.push("EXISTS (SELECT 1 FROM list_members m WHERE m.contact_id = c.id AND m.list_id = ?)"); vals.push(list); }
+      const seg = url.searchParams.get("segment");
+      if (seg) { const w = await segmentWhere(env, seg); where.push(w.sql); vals.push(...w.params); }
       const w = where.length ? "WHERE " + where.join(" AND ") : "";
       const [rows, total] = await env.DB.batch([
-        env.DB.prepare(`SELECT c.id, c.email, c.name, c.status, c.source, c.consent_at, c.created_at,
+        env.DB.prepare(`SELECT c.id, c.email, c.name, c.status, c.source, c.consent_at, c.created_at, c.props,
           (SELECT GROUP_CONCAT(m.list_id) FROM list_members m WHERE m.contact_id = c.id) AS list_ids
           FROM contacts c ${w} ORDER BY c.created_at DESC LIMIT ? OFFSET ?`).bind(...vals, limit, offset),
         env.DB.prepare(`SELECT COUNT(*) AS n FROM contacts c ${w}`).bind(...vals),
@@ -276,7 +285,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
           FROM enrollments e JOIN sequences q ON q.id = e.sequence_id WHERE e.contact_id = ? ORDER BY e.created_at DESC`).bind(b),
       ]);
       const ref = (ct as any).ref_link ? await env.DB.prepare("SELECT platform, source_type, source_id FROM links WHERE code = ?").bind((ct as any).ref_link).first() : null;
-      return json({ contact: ct, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results, enrollments: enrolled.results, ref });
+      const subs = (await env.DB.prepare("SELECT x.form_id, x.created_at, x.page_url, f.name FROM form_submissions x LEFT JOIN forms f ON f.id = x.form_id WHERE x.contact_id = ? ORDER BY x.created_at DESC LIMIT 20").bind(b).all()).results;
+      return json({ contact: { ...ct, props: JSON.parse((ct as any).props || "{}") }, lists: (lists.results as any[]).map((x) => x.list_id), sends: sends.results, enrollments: enrolled.results, ref, submissions: subs });
     }
     if (b && m === "PATCH") {
       const d = await body(req);
@@ -284,6 +294,12 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       if (!ct) throw new HttpError(404, "That contact doesn’t exist any more.");
       const status = ["subscribed", "unsubscribed", "bounced", "complained", "pending"].includes(d.status) ? d.status : ct.status;
       await env.DB.prepare("UPDATE contacts SET name = ?, status = ?, updated_at = ? WHERE id = ?").bind(d.name !== undefined ? str(d.name, 80) : ct.name, status, t, b).run();
+      if (d.props && typeof d.props === "object") {
+        const keys = new Set((await env.DB.prepare("SELECT key FROM contact_fields").all<{ key: string }>()).results.map((x) => x.key));
+        const clean: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(d.props)) if (keys.has(k)) clean[k] = v === "" ? null : Array.isArray(v) ? v.map((x) => str(x, 80)) : typeof v === "number" ? v : str(v, 2000);
+        if (Object.keys(clean).length) await env.DB.prepare("UPDATE contacts SET props = json_patch(COALESCE(props, '{}'), ?) WHERE id = ?").bind(JSON.stringify(clean), b).run();
+      }
       if (status !== "subscribed" && ct.status === "subscribed") await exitAll(env, b, status);
       if (Array.isArray(d.lists)) {
         const stmts = [env.DB.prepare("DELETE FROM list_members WHERE contact_id = ?").bind(b)];
@@ -297,7 +313,147 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         env.DB.prepare("DELETE FROM list_members WHERE contact_id = ?").bind(b),
         env.DB.prepare("DELETE FROM sends WHERE contact_id = ?").bind(b),
         env.DB.prepare("DELETE FROM enrollments WHERE contact_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM form_submissions WHERE contact_id = ?").bind(b),
         env.DB.prepare("DELETE FROM contacts WHERE id = ?").bind(b),
+      ]);
+      return json({ ok: true });
+    }
+  }
+
+
+  /* ---------- contact fields ---------- */
+  if (a === "fields") {
+    if (!b && m === "GET") {
+      const { results } = await env.DB.prepare("SELECT * FROM contact_fields ORDER BY created_at").all<any>();
+      return json({ fields: results.map((f) => ({ ...f, options: JSON.parse(f.options || "[]") })), types: FIELD_TYPES });
+    }
+    const opts = (v: unknown) => (Array.isArray(v) ? v : String(v || "").split("\n")).map((x) => str(x, 80)).filter(Boolean).filter((x, i, arr) => arr.indexOf(x) === i).slice(0, 60);
+    if (!b && m === "POST") {
+      const d = await body(req);
+      const label = str(d.label, 60);
+      if (!label) throw new HttpError(400, "Give the field a name.");
+      const type = FIELD_TYPES.includes(d.type) ? d.type : "text";
+      const options = opts(d.options);
+      if ((type === "select" || type === "multiselect") && !options.length) throw new HttpError(400, "Add at least one option, one per line.");
+      let key = slugify(label, 30).replace(/-/g, "_").replace(/^[^a-z]+/, "") || "field";
+      if (["email", "name", "consent", "fields", "website", "sref", "page", "form", "page_url"].includes(key)) key = key + "_field";
+      let k = key, n = 2;
+      while (await env.DB.prepare("SELECT 1 FROM contact_fields WHERE key = ?").bind(k).first()) k = `${key}_${n++}`;
+      const fid = id("cf_");
+      await env.DB.prepare("INSERT INTO contact_fields (id, key, label, type, options, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(fid, k, label, type, JSON.stringify(options), t).run();
+      return json({ field: { id: fid, key: k, label, type, options } }, 201);
+    }
+    if (b && m === "PATCH") {
+      const f = await env.DB.prepare("SELECT * FROM contact_fields WHERE id = ?").bind(b).first<any>();
+      if (!f) throw new HttpError(404, "That field doesn’t exist any more.");
+      const d = await body(req);
+      await env.DB.prepare("UPDATE contact_fields SET label = ?, options = ? WHERE id = ?")
+        .bind(d.label !== undefined ? str(d.label, 60) || f.label : f.label, d.options !== undefined ? JSON.stringify(opts(d.options)) : f.options, b).run();
+      return json({ ok: true });
+    }
+    if (b && m === "DELETE") {
+      const f = await env.DB.prepare("SELECT key FROM contact_fields WHERE id = ?").bind(b).first<{ key: string }>();
+      if (!f) throw new HttpError(404, "That field doesn’t exist any more.");
+      await env.DB.prepare("DELETE FROM contact_fields WHERE id = ?").bind(b).run();
+      return json({ ok: true, note: "Values already saved on contacts are kept." });
+    }
+  }
+
+  /* ---------- forms ---------- */
+  if (a === "forms") {
+    const getF = async (fid: string) => {
+      const f = await env.DB.prepare("SELECT * FROM forms WHERE id = ?").bind(fid).first<any>();
+      if (!f) throw new HttpError(404, "That form doesn’t exist any more.");
+      return { ...f, fields: JSON.parse(f.fields || "[]") };
+    };
+    if (!b && m === "GET") {
+      const { results } = await env.DB.prepare(`SELECT f.*, l.name AS list_name, s.name AS site_name,
+        (SELECT COUNT(*) FROM form_submissions x WHERE x.form_id = f.id) AS submissions,
+        (SELECT COUNT(*) FROM form_submissions x WHERE x.form_id = f.id AND x.created_at > ?) AS recent,
+        (SELECT MAX(created_at) FROM form_submissions x WHERE x.form_id = f.id) AS last_at
+        FROM forms f LEFT JOIN lists l ON l.id = f.list_id LEFT JOIN sites s ON s.id = f.site_id ORDER BY f.updated_at DESC`).bind(t - 30 * 864e5).all<any>();
+      return json({ forms: results.map((f) => ({ ...f, fields: JSON.parse(f.fields || "[]") })), go: `https://go.${env.ROOT_DOMAIN}` });
+    }
+    if (!b && m === "POST") {
+      const d = await body(req);
+      const fid = id("fm_");
+      await env.DB.prepare("INSERT INTO forms (id, name, site_id, list_id, fields, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(fid, str(d.name, 80) || "Untitled form", d.site_id || null, d.list_id || null, JSON.stringify([{ key: "name", required: false }]), t, t).run();
+      return json({ form: await getF(fid) }, 201);
+    }
+    if (b && !c && m === "GET") return json({ form: await getF(b), go: `https://go.${env.ROOT_DOMAIN}` });
+    if (b && !c && m === "PATCH") {
+      const f = await getF(b);
+      const d = await body(req);
+      const known = new Set(["name", ...((await env.DB.prepare("SELECT key FROM contact_fields").all<{ key: string }>()).results.map((x) => x.key))]);
+      const fields = Array.isArray(d.fields)
+        ? d.fields.map((x: any) => ({ key: str(x.key, 40), required: !!x.required, ...(x.label ? { label: str(x.label, 80) } : {}) })).filter((x: any) => known.has(x.key)).filter((x: any, i: number, arr: any[]) => arr.findIndex((y) => y.key === x.key) === i).slice(0, 30)
+        : f.fields;
+      const redirect = d.redirect_url !== undefined ? str(d.redirect_url, 500) : f.redirect_url;
+      if (redirect && !/^https:\/\/[^\s]+$/.test(redirect)) throw new HttpError(400, "The thank-you link needs to start with https://");
+      await env.DB.prepare("UPDATE forms SET name = ?, site_id = ?, list_id = ?, fields = ?, button = ?, success = ?, redirect_url = ?, status = ?, updated_at = ? WHERE id = ?").bind(
+        d.name !== undefined ? str(d.name, 80) || f.name : f.name,
+        d.site_id !== undefined ? d.site_id || null : f.site_id,
+        d.list_id !== undefined ? d.list_id || null : f.list_id,
+        JSON.stringify(fields),
+        d.button !== undefined ? str(d.button, 40) || "Sign up" : f.button,
+        d.success !== undefined ? str(d.success, 300) || "Thanks, you’re on the list." : f.success,
+        redirect,
+        ["active", "off"].includes(d.status) ? d.status : f.status, t, b).run();
+      return json({ form: await getF(b) });
+    }
+    if (b && !c && m === "DELETE") {
+      await getF(b);
+      await env.DB.batch([env.DB.prepare("DELETE FROM form_submissions WHERE form_id = ?").bind(b), env.DB.prepare("DELETE FROM forms WHERE id = ?").bind(b)]);
+      return json({ ok: true });
+    }
+    if (b && c === "submissions" && m === "GET") {
+      const { results } = await env.DB.prepare(`SELECT x.id, x.data, x.page_url, x.created_at, c.id AS contact_id, c.email, c.status
+        FROM form_submissions x LEFT JOIN contacts c ON c.id = x.contact_id WHERE x.form_id = ? ORDER BY x.created_at DESC LIMIT ?`)
+        .bind(b, Math.min(2000, Number(url.searchParams.get("limit")) || 100)).all<any>();
+      return json({ submissions: results.map((r) => ({ ...r, data: JSON.parse(r.data || "{}") })) });
+    }
+  }
+
+  /* ---------- smart lists ---------- */
+  if (a === "segments") {
+    const count = async (rules: any) => {
+      const w = await compileRules(env, cleanRules(rules));
+      const [n, sample] = await env.DB.batch([
+        env.DB.prepare(`SELECT COUNT(*) AS n, SUM(c.status = 'subscribed') AS subscribed FROM contacts c WHERE ${w.sql}`).bind(...w.params),
+        env.DB.prepare(`SELECT c.id, c.email, c.name FROM contacts c WHERE ${w.sql} ORDER BY c.created_at DESC LIMIT 5`).bind(...w.params),
+      ]);
+      const r = (n.results[0] || {}) as any;
+      return { count: r.n || 0, subscribed: r.subscribed || 0, sample: sample.results };
+    };
+    if (!b && m === "GET") {
+      const { results } = await env.DB.prepare("SELECT * FROM segments ORDER BY name").all<any>();
+      const out = [];
+      for (const sg of results) { let c2 = { count: 0, subscribed: 0 }; try { c2 = await count(JSON.parse(sg.rules)); } catch { /* broken rule */ } out.push({ ...sg, rules: JSON.parse(sg.rules), count: c2.count, subscribed: c2.subscribed }); }
+      return json({ segments: out });
+    }
+    if (b === "preview" && m === "POST") return json(await count((await body(req)).rules));
+    if (!b && m === "POST") {
+      const d = await body(req);
+      const rules = cleanRules(d.rules);
+      await compileRules(env, rules);
+      const sid = id("sg_");
+      await env.DB.prepare("INSERT INTO segments (id, name, rules, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").bind(sid, str(d.name, 60) || "Smart list", JSON.stringify(rules), t, t).run();
+      return json({ id: sid }, 201);
+    }
+    if (b && m === "PATCH") {
+      const sg = await env.DB.prepare("SELECT * FROM segments WHERE id = ?").bind(b).first<any>();
+      if (!sg) throw new HttpError(404, "That smart list doesn’t exist any more.");
+      const d = await body(req);
+      const rules = d.rules !== undefined ? cleanRules(d.rules) : JSON.parse(sg.rules);
+      await compileRules(env, rules);
+      await env.DB.prepare("UPDATE segments SET name = ?, rules = ?, updated_at = ? WHERE id = ?").bind(d.name !== undefined ? str(d.name, 60) || sg.name : sg.name, JSON.stringify(rules), t, b).run();
+      return json({ ok: true });
+    }
+    if (b && m === "DELETE") {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM segments WHERE id = ?").bind(b),
+        env.DB.prepare("UPDATE campaigns SET segment_id = NULL WHERE segment_id = ? AND status IN ('draft','scheduled')").bind(b),
       ]);
       return json({ ok: true });
     }
@@ -344,8 +500,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   /* ---------- campaigns ---------- */
   if (a === "campaigns") {
     if (!b && m === "GET") {
-      const { results } = await env.DB.prepare(`SELECT cp.id, cp.name, cp.subject, cp.status, cp.list_id, cp.site_id, cp.scheduled_at, cp.sent_at, cp.updated_at, l.name AS list_name
-        FROM campaigns cp LEFT JOIN lists l ON l.id = cp.list_id ORDER BY cp.updated_at DESC`).all<any>();
+      const { results } = await env.DB.prepare(`SELECT cp.id, cp.name, cp.subject, cp.status, cp.list_id, cp.segment_id, cp.site_id, cp.scheduled_at, cp.sent_at, cp.updated_at, COALESCE(l.name, sg.name) AS list_name
+        FROM campaigns cp LEFT JOIN lists l ON l.id = cp.list_id LEFT JOIN segments sg ON sg.id = cp.segment_id ORDER BY cp.updated_at DESC`).all<any>();
       const out = [];
       for (const r of results) out.push({ ...r, stats: r.status === "draft" ? null : await campaignStats(env, r.id) });
       return json({ campaigns: out });
@@ -359,18 +515,23 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     }
     if (b && !c && m === "GET") {
       const cp = await getCampaign(env, b);
-      return json({ campaign: cp, stats: await campaignStats(env, b), audience: await audienceSize(env, cp.list_id) });
+      return json({ campaign: cp, stats: await campaignStats(env, b), audience: await audienceSize(env, cp.list_id, cp.segment_id) });
     }
     if (b && !c && m === "PATCH") {
       const cp = await getCampaign(env, b);
       if (!["draft", "scheduled"].includes(cp.status)) throw new HttpError(409, "This email has already gone out, so it can’t be edited. Duplicate it instead.");
       const d = await body(req);
       const f = (k: string, max: number) => (d[k] !== undefined ? str(d[k], max) : (cp as any)[k]);
-      const listId = d.list_id !== undefined ? d.list_id || null : cp.list_id;
+      let listId = d.list_id !== undefined ? d.list_id || null : cp.list_id;
+      let segId = d.segment_id !== undefined ? d.segment_id || null : cp.segment_id || null;
+      if (d.segment_id) listId = null;
+      else if (d.list_id !== undefined) segId = null;
+      if (segId && !(await env.DB.prepare("SELECT 1 FROM segments WHERE id = ?").bind(segId).first())) throw new HttpError(404, "That smart list doesn’t exist any more.");
       const siteId = d.site_id !== undefined ? d.site_id || null : cp.site_id;
       await env.DB.prepare("UPDATE campaigns SET name = ?, subject = ?, preheader = ?, body = ?, list_id = ?, site_id = ?, updated_at = ? WHERE id = ?")
         .bind(f("name", 80) || "Untitled email", f("subject", 150), f("preheader", 200), f("body", 50000), listId, siteId, t, b).run();
-      return json({ campaign: await getCampaign(env, b), audience: await audienceSize(env, listId) });
+      await env.DB.prepare("UPDATE campaigns SET segment_id = ? WHERE id = ?").bind(segId, b).run();
+      return json({ campaign: await getCampaign(env, b), audience: await audienceSize(env, listId, segId) });
     }
     if (b && !c && m === "DELETE") {
       const cp = await getCampaign(env, b);
@@ -418,8 +579,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b && c === "duplicate" && m === "POST") {
       const cp = await getCampaign(env, b);
       const cid = id("cp_");
-      await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(cid, `${cp.name} (copy)`.slice(0, 80), cp.subject, cp.preheader, cp.body, cp.list_id, cp.site_id, t, t).run();
+      await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, segment_id, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(cid, `${cp.name} (copy)`.slice(0, 80), cp.subject, cp.preheader, cp.body, cp.list_id, cp.segment_id || null, cp.site_id, t, t).run();
       return json({ campaign: await getCampaign(env, cid) }, 201);
     }
   }

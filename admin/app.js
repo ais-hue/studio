@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270041";
+var VERSION = "202609270322";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -107,6 +107,8 @@ function route(){
   else if(top==="sites" && parts[1]) p=siteView(parts[1], parts[2]||"pages", parts[3]);
   else if(top==="sites") p=sitesView();
   else if(top==="contacts") p=contactsView(parts[1]);
+  else if(top==="forms" && parts[1]) p=formView(parts[1], parts[2]);
+  else if(top==="forms") p=formsView();
   else if(top==="emails" && parts[1]) p=emailView(parts[1]);
   else if(top==="emails") p=emailsView();
   else if(top==="automations" && parts[1]) p=automationView(parts[1], parts[2]);
@@ -228,6 +230,7 @@ function pageFields(tpl, c, page){
   if(tpl==="links") h+=ta("pcLinks","Links","links","One per line: Label | https://…");
   h+=ta("pcBody", tpl==="post"?"Post":"Extra text (optional)","body","Markdown: ## heading, **bold**, *italic*, [link](https://…), - list", tpl==="post"?"code":"");
   h+='<label class="check"><input type="checkbox" id="pcForm" '+(c.form===false?"":"checked")+'> Show the signup form</label>';
+  h+='<div class="field"><label for="pcFormId">Sign-up form</label><select id="pcFormId" data-c="form_id"><option value="">Standard: name and email</option>'+(S.forms||[]).map(function(f){ return '<option value="'+esc(f.id)+'"'+(c.form_id===f.id?" selected":"")+'>'+esc(f.name)+(f.status!=="active"?" (off)":"")+'</option>' }).join("")+'</select><span class="hint">Pick one of your <a href="#/forms">forms</a> to ask for more than name and email.</span></div>';
   if(tpl==="post") h+=f("pcEye","Heading above the signup","eyebrow",60);
   h+=f("pcCta","Button text","cta",30);
   h+=f("pcDesc","Search & share description","description",200,"What Google and link previews show. Leave blank to use the supporting line.");
@@ -235,7 +238,7 @@ function pageFields(tpl, c, page){
 }
 
 function siteView(sid, tab, pageId){
-  return Promise.all([api("GET","sites"), api("GET","sites/"+sid+"/pages"), api("GET","lists")]).then(function(r){
+  return Promise.all([api("GET","sites"), api("GET","sites/"+sid+"/pages"), api("GET","lists"), api("GET","forms").then(function(d){ S.forms=d.forms })]).then(function(r){
     var site = r[0].sites.filter(function(s){return s.id===sid})[0];
     if(!site) throw new Error("That site doesn’t exist any more.");
     var pages = r[1].pages, list = r[2].lists.filter(function(l){return l.site_id===sid})[0];
@@ -419,25 +422,38 @@ function csvParse(text){
 function csvCell(s){ s=String(s==null?"":s); return /[",\n;]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s }
 
 function contactsView(listParam){
-  var st = { list:listParam||"", q:"", status:"", offset:0, rows:[], total:0, open:null, panel:null };
-  var lists=[];
+  var st = { list:(listParam||"").indexOf("sg_")===0?"":(listParam||""), seg:(listParam||"").indexOf("sg_")===0?listParam:"", q:"", status:"", offset:0, rows:[], total:0, open:null, panel:null };
+  var lists=[], segs=[], ctx=null;
   function load(append){
-    var qs="limit=100&offset="+st.offset+(st.q?"&q="+encodeURIComponent(st.q):"")+(st.list?"&list="+st.list:"")+(st.status?"&status="+st.status:"");
+    var qs="limit=100&offset="+st.offset+(st.q?"&q="+encodeURIComponent(st.q):"")+(st.list?"&list="+st.list:"")+(st.seg?"&segment="+st.seg:"")+(st.status?"&status="+st.status:"");
     return api("GET","contacts?"+qs).then(function(d){ st.rows = append? st.rows.concat(d.contacts) : d.contacts; st.total=d.total; renderTable() });
   }
   function listName(id){ var l=lists.filter(function(x){return x.id===id})[0]; return l? l.name : "" }
   function renderShell(){
     var cur = lists.filter(function(l){return l.id===st.list})[0];
+    var curSeg = segs.filter(function(g){return g.id===st.seg})[0];
     var v=$("#view");
     v.innerHTML = head("Audience", "Contacts", "Everyone who signed up, across every site.", '<button class="btn" type="button" id="exportBtn">Export CSV</button><button class="btn" type="button" id="importBtn">Import</button><button class="btn primary" type="button" id="addBtn">Add contact</button>')+
       '<div class="cols"><aside class="stack" style="gap:10px"><div class="actions" style="justify-content:space-between"><span class="eyebrow">Lists</span><button class="btn sm" type="button" id="newList">New list</button></div><div id="newListHost"></div><div class="listnav">'+
-        '<button type="button" data-list="" aria-pressed="'+(!st.list)+'"><span>All contacts</span><span></span></button>'+
+        '<button type="button" data-list="" aria-pressed="'+(!st.list&&!st.seg)+'"><span>All contacts</span><span></span></button>'+
         lists.map(function(l){ return '<button type="button" data-list="'+esc(l.id)+'" aria-pressed="'+(st.list===l.id)+'"><span>'+esc(l.name)+'</span><span class="num">'+l.subscribed+'</span></button>' }).join("")+'</div>'+
+        '<div class="actions" style="justify-content:space-between;margin-top:10px"><span class="eyebrow">Smart lists</span><button class="btn sm" type="button" id="newSeg">New</button></div>'+
+        (segs.length ? '<div class="listnav">'+segs.map(function(g){ return '<button type="button" data-seg="'+esc(g.id)+'" aria-pressed="'+(st.seg===g.id)+'"><span>'+esc(g.name)+'</span><span class="num">'+g.subscribed+'</span></button>' }).join("")+'</div>' : '<p class="hint" style="margin:0">Lists that fill themselves from rules, like “in Ireland and clicked the launch email”.</p>')+
+        (curSeg ? '<div class="stack" style="margin-top:6px"><p class="hint" style="margin:0">'+esc(ruleSummary(curSeg.rules, ctx))+'</p><div class="actions"><button type="button" class="btn sm" id="editSeg">Edit rules</button><button type="button" class="btn sm danger" id="delSeg">Delete</button></div><div id="segConfirm"></div></div>' : '')+
         (cur ? '<div class="stack" style="margin-top:6px">'+(cur.site_id ? '<p class="hint">Signups from '+esc(cur.site_name)+' land here. <a href="#/sites/'+esc(cur.site_id)+'/welcome">Welcome email</a></p>' : '<div class="actions"><button type="button" class="btn sm" id="renameList">Rename</button><button type="button" class="btn sm danger" id="deleteList">Delete list</button></div><div id="listConfirm"></div>')+'</div>' : '')+
       '</aside><section class="stack"><div id="panel"></div><div class="filters"><label class="sr" for="cq">Search</label><input type="search" id="cq" placeholder="Search name or email" value="'+esc(st.q)+'">'+
         '<label class="sr" for="cs">Status</label><select id="cs"><option value="">Any status</option><option value="subscribed"'+(st.status==="subscribed"?" selected":"")+'>Subscribed</option><option value="unsubscribed"'+(st.status==="unsubscribed"?" selected":"")+'>Unsubscribed</option><option value="pending"'+(st.status==="pending"?" selected":"")+'>Waiting to confirm</option><option value="bounced"'+(st.status==="bounced"?" selected":"")+'>Bounced</option><option value="complained"'+(st.status==="complained"?" selected":"")+'>Marked as spam</option></select>'+
         '<span class="label" id="count"></span></div><div id="tableHost"></div></section></div>';
-    $$("[data-list]").forEach(function(b){ b.onclick=function(){ st.list=b.dataset.list; st.offset=0; st.open=null; st.panel=null; history.replaceState(null,"","#/contacts"+(st.list?"/"+st.list:"")); renderShell(); load() } });
+    $$("[data-seg]").forEach(function(b){ b.onclick=function(){ st.seg=b.dataset.seg; st.list=""; st.offset=0; st.open=null; st.panel=null; history.replaceState(null,"","#/contacts/"+st.seg); renderShell(); load() } });
+    $("#newSeg").onclick=function(){ st.panel="segment"; st.editSeg=null; st.open=null; renderPanel() };
+    if(curSeg){
+      $("#editSeg").onclick=function(){ st.panel="segment"; st.editSeg=curSeg; renderPanel(); window.scrollTo({top:0,behavior:"smooth"}) };
+      $("#delSeg").onclick=function(){
+        $("#segConfirm").innerHTML='<div class="confirm"><span>Delete this smart list? Nobody is removed from Contacts. Draft emails aimed at it go back to “everyone”.</span><button class="btn sm danger" type="button" id="dsY">Delete</button></div>';
+        $("#dsY").onclick=function(){ api("DELETE","segments/"+curSeg.id).then(refreshLists).then(function(){ st.seg=""; history.replaceState(null,"","#/contacts"); renderShell(); load() }) };
+      };
+    }
+    $$("[data-list]").forEach(function(b){ b.onclick=function(){ st.list=b.dataset.list; st.seg=""; st.offset=0; st.open=null; st.panel=null; history.replaceState(null,"","#/contacts"+(st.list?"/"+st.list:"")); renderShell(); load() } });
     var qt; $("#cq").oninput=function(){ var val=this.value; clearTimeout(qt); qt=setTimeout(function(){ st.q=val; st.offset=0; load() },250) };
     $("#cs").onchange=function(){ st.status=this.value; st.offset=0; load() };
     $("#addBtn").onclick=function(){ st.panel="add"; st.open=null; renderPanel() };
@@ -474,6 +490,13 @@ function contactsView(listParam){
   function renderPanel(){
     var p=$("#panel"); if(!p) return;
     if(!st.panel){ p.innerHTML=""; return }
+    if(st.panel==="segment"){
+      segmentEditor(p, ctx, st.editSeg, function(name, rules){
+        var req = st.editSeg ? api("PATCH","segments/"+st.editSeg.id,{name:name, rules:rules}).then(function(){ return st.editSeg.id }) : api("POST","segments",{name:name, rules:rules}).then(function(r){ return r.id });
+        return req.then(function(sid){ toast(st.editSeg?"Smart list saved":"Smart list created"); st.panel=null; st.seg=sid; st.list=""; history.replaceState(null,"","#/contacts/"+sid); return refreshLists().then(function(){ renderShell(); load() }) });
+      }, function(){ st.panel=null; renderPanel() });
+      return;
+    }
     var listChecks=function(sel){ return lists.length ? '<div class="field"><span class="label">Lists</span>'+lists.map(function(l){ return '<label class="check"><input type="checkbox" data-lc="'+esc(l.id)+'"'+(sel.indexOf(l.id)>-1?" checked":"")+'> '+esc(l.name)+'</label>' }).join("")+'</div>' : '' };
     if(st.panel==="add"){
       p.innerHTML='<form class="drawer" id="addForm"><h2 class="sec">Add contact</h2><div class="fieldrow"><div class="field"><label for="acEmail">Email</label><input type="email" id="acEmail" required maxlength="254"></div><div class="field"><label for="acName">Name</label><input type="text" id="acName" maxlength="80"></div></div>'+
@@ -516,6 +539,13 @@ function contactsView(listParam){
           (c.status==="bounced" ? '<div class="notice danger"><p>Emails to this address bounced, so Studio stopped sending to it. Only switch it back if you know the address works now.</p></div>' : '')+
           (c.status==="complained" ? '<div class="notice danger"><p>They marked one of your emails as spam, so Studio stopped emailing them. Leave this as it is unless they ask to hear from you again.</p></div>' : '')+
           (c.status==="pending" ? '<div class="notice"><p>They signed up but haven’t tapped the confirmation link yet. Nothing else is sent until they do.</p></div>' : '')+
+          (ctx.fields.length ? '<h2 class="sec">Details</h2><div class="fieldrow" id="cdProps">'+ctx.fields.map(function(f){ var v=c.props[f.key], iid="cp_"+f.key;
+              if(f.type==="multiselect") return '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">'+esc(f.label)+'</legend>'+f.options.map(function(o){ return '<label class="check"><input type="checkbox" data-pm="'+esc(f.key)+'" value="'+esc(o)+'"'+(Array.isArray(v)&&v.indexOf(o)>-1?" checked":"")+'> '+esc(o)+'</label>' }).join("")+'</fieldset>';
+              if(f.type==="checkbox") return '<div class="field"><span class="label">'+esc(f.label)+'</span><label class="check"><input type="checkbox" data-pc="'+esc(f.key)+'"'+(v?" checked":"")+'> Yes</label></div>';
+              if(f.type==="select") return '<div class="field"><label for="'+iid+'">'+esc(f.label)+'</label><select id="'+iid+'" data-pv="'+esc(f.key)+'"><option value="">—</option>'+f.options.map(function(o){ return '<option'+(v===o?" selected":"")+'>'+esc(o)+'</option>' }).join("")+(v&&f.options.indexOf(v)<0?'<option selected>'+esc(v)+'</option>':'')+'</select></div>';
+              return '<div class="field"><label for="'+iid+'">'+esc(f.label)+'</label>'+(f.type==="textarea"?'<textarea id="'+iid+'" data-pv="'+esc(f.key)+'">'+esc(v||"")+'</textarea>':'<input type="'+(f.type==="number"?"number":f.type==="date"?"date":"text")+'" id="'+iid+'" data-pv="'+esc(f.key)+'" value="'+esc(v==null?"":v)+'">')+'</div>' }).join("")+'</div>' : '')+
+          (d.submissions&&d.submissions.length ? '<h2 class="sec">Forms</h2><div class="tablewrap"><table><tbody>'+d.submissions.map(function(x){ var host=""; try{ host=x.page_url?new URL(x.page_url).hostname:"" }catch(e){}
+              return '<tr><td><a href="#/forms/'+esc(x.form_id)+'/subs">'+esc(x.name||"Deleted form")+'</a><span class="sub">'+esc(host)+'</span></td><td class="r mono">'+fmtDate(x.created_at,true)+'</td></tr>' }).join("")+'</tbody></table></div>' : '')+
           '<h2 class="sec">Automations</h2>'+
           (d.enrollments.length ? '<div class="tablewrap"><table><tbody>'+d.enrollments.map(function(e){
               var where = e.status==="active" ? "Email "+(e.step_index+1)+" of "+e.steps+" due "+(e.next_at?fmtDate(e.next_at,true):"soon") : e.status==="completed" ? "Got every email" : "Left early: "+(e.exit_reason||"");
@@ -535,6 +565,10 @@ function contactsView(listParam){
           $("#cdConfirm").innerHTML='<div class="confirm"><span>Delete '+esc(c.email)+' and their email history? If you just want them to stop getting emails, set them to Unsubscribed instead.</span><button class="btn sm danger" type="button" id="cdYes">Delete</button></div>';
           $("#cdYes").onclick=function(){ api("DELETE","contacts/"+c.id).then(function(){ toast("Contact deleted"); st.panel=null; st.open=null; renderPanel(); load() }) };
         };
+        var pv=function(key,val){ var o={}; o[key]=val; save({props:o}) };
+        $$("[data-pv]",p).forEach(function(i){ i.oninput=i.onchange=function(){ var f=ctx.fields.filter(function(x){return x.key===i.dataset.pv})[0]; pv(i.dataset.pv, f&&f.type==="number"&&i.value!==""?Number(i.value):i.value) } });
+        $$("[data-pc]",p).forEach(function(i){ i.onchange=function(){ pv(i.dataset.pc, i.checked?1:0); save.now() } });
+        $$("[data-pm]",p).forEach(function(i){ i.onchange=function(){ pv(i.dataset.pm, $$('[data-pm="'+i.dataset.pm+'"]:checked',p).map(function(x){return x.value})); save.now() } });
         $$("[data-exit]",p).forEach(function(b){ b.onclick=function(){ api("POST","enrollments/"+b.dataset.exit+"/exit").then(function(){ toast("Taken out"); renderPanel() }).catch(function(e){ toast(e.message,true) }) } });
         var ag=$("#cdAutoGo"); if(ag) ag.onclick=function(){ var qid=$("#cdAuto").value; if(!qid){ toast("Pick an automation first.",true); return }
           api("POST","sequences/"+qid+"/enroll",{contact_id:c.id}).then(function(){ toast("Added. The first email goes out on schedule."); renderPanel() }).catch(function(e){ toast(e.message,true) }) };
@@ -555,9 +589,214 @@ function contactsView(listParam){
       toast(all.length+" contacts exported");
     }).catch(function(e){ toast(e.message,true) });
   }
-  function refreshLists(){ return api("GET","lists").then(function(d){ lists=d.lists }) }
+  function refreshLists(){ return Promise.all([api("GET","lists"), api("GET","segments"), ctx?Promise.resolve(ctx):loadRuleContext()]).then(function(r){ lists=r[0].lists; segs=r[1].segments; ctx=r[2]; ctx.lists=lists }) }
   var want=store("studio.openContact"); if(want){ store("studio.openContact",""); st.open=want; st.panel="detail" }
   return refreshLists().then(function(){ renderShell(); return load() });
+}
+
+/* ============ contact fields (shared) ============ */
+var FIELD_TYPE_NAMES={text:"Short text",textarea:"Long text",number:"Number",date:"Date",select:"Dropdown (pick one)",multiselect:"Tick boxes (pick several)",checkbox:"Yes / no tick box"};
+function loadFields(){ return api("GET","fields").then(function(d){ S.fields=d.fields; return d.fields }) }
+/** A little form to create a contact field. Resolves with the new field, or null. */
+function newFieldForm(host){
+  return new Promise(function(resolve){
+    host.innerHTML='<form class="sheet" id="nfF"><h3>New contact field</h3><div class="fieldrow"><div class="field"><label for="nfLabel">Name</label><input type="text" id="nfLabel" required maxlength="60" placeholder="e.g. Country"></div>'+
+      '<div class="field"><label for="nfType">Type</label><select id="nfType">'+Object.keys(FIELD_TYPE_NAMES).map(function(k){ return '<option value="'+k+'">'+FIELD_TYPE_NAMES[k]+'</option>' }).join("")+'</select></div></div>'+
+      '<div class="field" id="nfOptsF" hidden><label for="nfOpts">Options</label><textarea id="nfOpts" placeholder="One per line"></textarea></div>'+
+      '<div class="actions"><button class="btn sm primary" type="submit">Create field</button><button class="btn sm ghost" type="button" id="nfCancel">Cancel</button></div></form>';
+    $("#nfLabel",host).focus();
+    $("#nfType",host).onchange=function(){ $("#nfOptsF",host).hidden=["select","multiselect"].indexOf(this.value)<0 };
+    $("#nfCancel",host).onclick=function(){ host.innerHTML=""; resolve(null) };
+    $("#nfF",host).onsubmit=function(e){ e.preventDefault();
+      api("POST","fields",{label:$("#nfLabel",host).value, type:$("#nfType",host).value, options:$("#nfOpts",host).value}).then(function(r){ host.innerHTML=""; S.fields=null; toast("Field added"); resolve(r.field) }).catch(function(err){ toast(err.message,true) }) };
+  });
+}
+
+/* ============ forms ============ */
+function formsView(){
+  return Promise.all([api("GET","forms"), loadFields()]).then(function(r){
+    var d=r[0], fields=r[1], v=$("#view");
+    var html=head("Audience","Forms","Sign-up forms for your pages, any other website, or your apps. Everyone who fills one in lands in Contacts.",'<button class="btn primary" type="button" id="newForm">New form</button>');
+    html+='<div class="grid2"><div class="stack">';
+    html+= d.forms.length ? '<div class="tablewrap"><table><thead><tr><th>Form</th><th>Adds people to</th><th>Status</th><th class="r">Last 30 days</th><th class="r">All time</th></tr></thead><tbody>'+
+        d.forms.map(function(f){ return '<tr class="click" data-go="'+esc(f.id)+'" tabindex="0"><td>'+esc(f.name)+'<span class="sub">'+(f.fields.length+1)+' field'+(f.fields.length?'s':'')+(f.site_name?' · styled as '+esc(f.site_name):'')+'</span></td><td>'+esc(f.list_name||"A new list")+'</td><td><span class="chip '+(f.status==="active"?"live":"off")+'">'+(f.status==="active"?"On":"Off")+'</span></td><td class="r mono">'+f.recent+'</td><td class="r mono">'+f.submissions+'</td></tr>' }).join("")+'</tbody></table></div>'
+      : '<div class="empty"><b>No forms yet</b>Your Studio pages already have a simple name + email sign-up. Make a form when you want more fields, or a sign-up on another website or in an app.</div>';
+    html+='</div><section class="panel"><h2 class="sec">Contact fields <button class="btn sm" type="button" id="addField">New field</button></h2><div id="nfHost" class="pad" hidden></div>'+
+      (fields.length ? '<div class="rows">'+fields.map(function(f){ return '<div class="rowi nosq"><span class="t">'+esc(f.label)+'<small>'+esc(FIELD_TYPE_NAMES[f.type]||f.type)+(f.options.length?': '+esc(f.options.join(", ")):'')+' · key '+esc(f.key)+'</small></span><span class="meta"><button class="btn sm ghost" type="button" data-delf="'+esc(f.id)+'" data-label="'+esc(f.label)+'">Delete</button></span></div>' }).join("")+'</div>'
+        : '<div class="empty">No extra fields yet. Name and email are built in.</div>')+'<div id="dfHost"></div></section></div>';
+    v.innerHTML=html;
+    $("#newForm").onclick=function(){ this.disabled=true; api("POST","forms",{name:"Untitled form"}).then(function(r){ go("#/forms/"+r.form.id) }).catch(function(e){ toast(e.message,true) }) };
+    $$("[data-go]").forEach(function(tr){ tr.onclick=function(){ go("#/forms/"+tr.dataset.go) }; tr.onkeydown=function(e){ if(e.key==="Enter") go("#/forms/"+tr.dataset.go) } });
+    $("#addField").onclick=function(){ var h=$("#nfHost"); h.hidden=false; newFieldForm(h).then(function(f){ h.hidden=true; if(f) route() }) };
+    $$("[data-delf]").forEach(function(b){ b.onclick=function(){
+      $("#dfHost").innerHTML='<div class="confirm" style="margin:0 18px 16px"><span>Delete the “'+esc(b.dataset.label)+'” field? It comes off every form. Answers already saved on contacts are kept.</span><button class="btn sm danger" type="button" id="dfY">Delete</button><button class="btn sm ghost" type="button" id="dfN">Keep it</button></div>';
+      $("#dfN").onclick=function(){ $("#dfHost").innerHTML="" };
+      $("#dfY").onclick=function(){ api("DELETE","fields/"+b.dataset.delf).then(function(){ toast("Field deleted"); route() }).catch(function(e){ toast(e.message,true) }) };
+    } });
+  });
+}
+
+function formView(fid, tab){
+  tab=tab||"preview";
+  return Promise.all([api("GET","forms/"+fid), loadFields(), api("GET","lists"), api("GET","sites")]).then(function(r){
+    var f=r[0].form, goBase=r[0].go, fields=r[1], lists=r[2].lists, sites=r[3].sites, v=$("#view");
+    var fdef=function(k){ if(k==="name") return {key:"name",label:"Name",type:"text"}; return fields.filter(function(x){return x.key===k})[0] };
+    var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/forms" style="color:inherit;text-decoration:none">Forms</a> · '+(f.status==="active"?"on":"off")+'</span><h1 id="fTitle">'+esc(f.name)+'</h1></div>'+
+      '<div class="actions"><button class="btn danger" type="button" id="fDel">Delete</button></div></div><div id="fConfirm"></div>';
+    html+='<div class="editor wide"><form class="form panel" id="fForm" autocomplete="off"><h2 class="sec">Form <span class="saving" id="fSave">Saved</span></h2>'+
+      '<div class="actions"><button type="button" class="switch" role="switch" id="fOn" aria-checked="'+(f.status==="active")+'" aria-labelledby="fOnLbl"></button><span id="fOnLbl">'+(f.status==="active"?"On: taking sign-ups":"Off: not taking sign-ups")+'</span></div>'+
+      '<div class="field"><label for="fName">Name</label><input type="text" id="fName" maxlength="80" value="'+esc(f.name)+'"><span class="hint">Only you see this.</span></div>'+
+      '<div class="fieldrow"><div class="field"><label for="fList">Adds people to</label><select id="fList"><option value="">A new list named after this form</option>'+lists.map(function(l){ return '<option value="'+esc(l.id)+'"'+(f.list_id===l.id?" selected":"")+'>'+esc(l.name)+'</option>' }).join("")+'</select></div>'+
+      '<div class="field"><label for="fSite">Styled as</label><select id="fSite"><option value="">Plain</option>'+sites.map(function(s){ return '<option value="'+esc(s.id)+'"'+(f.site_id===s.id?" selected":"")+'>'+esc(s.name)+'</option>' }).join("")+'</select></div></div>'+
+      '<h2 class="sec">Fields</h2><div class="ffields" id="fFields"></div>'+
+      '<div class="actions"><label class="sr" for="fAdd">Add a field</label><select id="fAdd" style="flex:1 1 200px;width:auto"></select><button class="btn sm" type="button" id="fAddGo">Add</button></div><div id="fNewField"></div>'+
+      '<h2 class="sec">After they sign up</h2>'+
+      '<div class="field"><label for="fBtn">Button text</label><input type="text" id="fBtn" maxlength="40" value="'+esc(f.button)+'"></div>'+
+      '<div class="field"><label for="fOk">Thank-you message</label><input type="text" id="fOk" maxlength="300" value="'+esc(f.success)+'"><span class="hint">With double opt-in on, people see “check your inbox” instead.</span></div>'+
+      '<div class="field"><label for="fRedir">Or send them to a page</label><input type="text" id="fRedir" maxlength="500" value="'+esc(f.redirect_url)+'" placeholder="https://… (optional)"></div>'+
+      '</form><div class="stack"><nav class="tabs" role="tablist">'+[["preview","Preview"],["embed","Use it"],["subs","Sign-ups"]].map(function(t){ return '<a role="tab" href="#/forms/'+esc(fid)+'/'+t[0]+'" aria-selected="'+(tab===t[0])+'">'+t[1]+'</a>' }).join("")+'</nav><div id="fTab"></div></div></div>';
+    v.innerHTML=html;
+    var save=saver($("#fSave"), function(x){ return api("PATCH","forms/"+fid,x).then(function(rr){ f=rr.form; $("#fTitle").textContent=f.name; if(tab==="preview") showTab() }) });
+    function drawFields(){
+      var rows=[{key:"email",required:true,fixed:true}].concat(f.fields);
+      $("#fFields").innerHTML=rows.map(function(x,i){ var d=x.fixed?{label:"Email",type:"email"}:fdef(x.key)||{label:x.key,type:"?"};
+        return '<div class="ffield"><span class="t">'+esc(d.label)+'<small>'+(x.fixed?"Always included":esc(FIELD_TYPE_NAMES[d.type]||d.type))+'</small></span>'+
+          (x.fixed?'<span class="hint">Required</span>':'<label class="check"><input type="checkbox" data-req="'+(i-1)+'"'+(x.required?" checked":"")+'> Required</label><span class="ffacts"><button type="button" class="btn sm ghost" data-up="'+(i-1)+'" aria-label="Move up"'+(i===1?" disabled":"")+'>↑</button><button type="button" class="btn sm ghost" data-down="'+(i-1)+'" aria-label="Move down"'+(i===rows.length-1?" disabled":"")+'>↓</button><button type="button" class="btn sm ghost" data-rm="'+(i-1)+'">Remove</button></span>')+'</div>' }).join("");
+      var used=f.fields.map(function(x){return x.key});
+      var avail=[{key:"name",label:"Name"}].concat(fields).filter(function(x){ return used.indexOf(x.key)<0 });
+      $("#fAdd").innerHTML=avail.map(function(x){ return '<option value="'+esc(x.key)+'">'+esc(x.label)+'</option>' }).join("")+'<option value="__new">Create a new field…</option>';
+      var commit=function(){ save({fields:f.fields}); save.now() };
+      $$("[data-req]").forEach(function(c){ c.onchange=function(){ f.fields[Number(c.dataset.req)].required=c.checked; commit() } });
+      $$("[data-up]").forEach(function(b){ b.onclick=function(){ var i=Number(b.dataset.up); var t=f.fields[i-1]; f.fields[i-1]=f.fields[i]; f.fields[i]=t; drawFields(); commit() } });
+      $$("[data-down]").forEach(function(b){ b.onclick=function(){ var i=Number(b.dataset.down); var t=f.fields[i+1]; f.fields[i+1]=f.fields[i]; f.fields[i]=t; drawFields(); commit() } });
+      $$("[data-rm]",$("#fFields")).forEach(function(b){ b.onclick=function(){ f.fields.splice(Number(b.dataset.rm),1); drawFields(); commit() } });
+    }
+    $("#fAddGo").onclick=function(){ var k=$("#fAdd").value;
+      if(k==="__new"){ newFieldForm($("#fNewField")).then(function(nf){ if(!nf) return; fields.push(nf); f.fields.push({key:nf.key,required:false}); drawFields(); save({fields:f.fields}); save.now() }); return }
+      if(!k) return; f.fields.push({key:k,required:false}); drawFields(); save({fields:f.fields}); save.now() };
+    drawFields();
+    $("#fName").oninput=function(){ save({name:this.value}) };
+    $("#fBtn").oninput=function(){ save({button:this.value}) };
+    $("#fOk").oninput=function(){ save({success:this.value}) };
+    $("#fRedir").oninput=function(){ save({redirect_url:this.value.trim()}) };
+    $("#fList").onchange=function(){ save({list_id:this.value||null}); save.now() };
+    $("#fSite").onchange=function(){ save({site_id:this.value||null}); save.now() };
+    $("#fOn").onclick=function(){ var on=this.getAttribute("aria-checked")!=="true"; this.setAttribute("aria-checked",String(on)); $("#fOnLbl").textContent=on?"On: taking sign-ups":"Off: not taking sign-ups"; save({status:on?"active":"off"}); save.now() };
+    $("#fDel").onclick=function(){
+      $("#fConfirm").innerHTML='<div class="confirm"><span>Delete this form and its sign-up history? People who signed up stay in Contacts. Anywhere it’s embedded will show nothing.</span><button class="btn sm danger" type="button" id="fdY">Delete</button><button class="btn sm ghost" type="button" id="fdN">Keep it</button></div>';
+      $("#fdN").onclick=function(){ $("#fConfirm").innerHTML="" };
+      $("#fdY").onclick=function(){ api("DELETE","forms/"+fid).then(function(){ toast("Form deleted"); go("#/forms") }).catch(function(e){ toast(e.message,true) }) };
+    };
+    function copyBtns(host){ $$("[data-copy]",host).forEach(function(b){ b.onclick=function(){ var t=$("#"+b.dataset.copy).value; (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){ toast("Copied") },function(){ $("#"+b.dataset.copy).select(); document.execCommand("copy"); toast("Copied") }) } }) }
+    function showTab(){
+      var h=$("#fTab");
+      if(tab==="embed"){
+        var js='<div data-studio-form="'+fid+'"></div>\n<script src="'+goBase+'/f/'+fid+'.js" async></script>';
+        var ifr='<iframe src="'+goBase+'/f/'+fid+'" title="Sign up" style="width:100%;border:0;min-height:320px" loading="lazy"></iframe>';
+        var api1='curl -X POST '+goBase+'/f/'+fid+' \\\n  -H "content-type: application/json" \\\n  -d \'{"email":"ada@example.com","name":"Ada","consent":true'+(f.fields.filter(function(x){return x.key!=="name"}).length?',"fields":{'+f.fields.filter(function(x){return x.key!=="name"}).map(function(x){ var d=fdef(x.key)||{}; return '"'+x.key+'":'+(d.type==="multiselect"?'["'+(d.options[0]||"")+'"]':d.type==="checkbox"?"true":d.type==="number"?"1":'"'+(d.options&&d.options[0]||"…")+'"') }).join(",")+'}':'')+'}\'';
+        var swift='var req = URLRequest(url: URL(string: "'+goBase+'/f/'+fid+'")!)\nreq.httpMethod = "POST"\nreq.setValue("application/json", forHTTPHeaderField: "content-type")\nreq.httpBody = try JSONSerialization.data(withJSONObject: [\n  "email": email, "name": name, "consent": true\n])\nlet (data, _) = try await URLSession.shared.data(for: req)';
+        h.innerHTML='<section class="panel"><h2 class="sec">On your Studio pages</h2><p class="pad" style="margin:0">Open a page, and under “Sign-up form” pick <b>'+esc(f.name)+'</b>.</p></section>'+
+          '<section class="panel"><h2 class="sec">On any website <button class="btn sm" type="button" data-copy="snJs">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">Paste where the form should go. It picks up the page’s font and colours.</p><textarea id="snJs" class="code snippet" readonly>'+esc(js)+'</textarea></div></section>'+
+          '<section class="panel"><h2 class="sec">As an iframe <button class="btn sm" type="button" data-copy="snIf">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">For site builders that don’t allow scripts.</p><textarea id="snIf" class="code snippet" readonly>'+esc(ifr)+'</textarea></div></section>'+
+          '<section class="panel"><h2 class="sec">From an app <button class="btn sm" type="button" data-copy="snApi">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">Send JSON from Seek or any app. Ask people to agree to emails in the app, then send <code>"consent": true</code>. Replies with <code>{"ok": true, "message": …}</code>, or <code>{"ok": false, "error": …}</code> to show them.</p><textarea id="snApi" class="code snippet" readonly>'+esc(api1)+'</textarea>'+
+            '<details><summary class="hint" style="cursor:pointer">Swift example</summary><textarea id="snSw" class="code snippet" readonly>'+esc(swift)+'</textarea><button class="btn sm" type="button" data-copy="snSw">Copy</button></details></div></section>'+
+          '<section class="panel"><h2 class="sec">As a link <button class="btn sm" type="button" data-copy="snLink">Copy</button></h2><div class="pad"><input type="text" id="snLink" readonly value="'+esc(goBase+'/f/'+fid)+'"></div></section>';
+        copyBtns(h);
+      } else if(tab==="subs"){
+        h.innerHTML='<div class="loading">Loading…</div>';
+        api("GET","forms/"+fid+"/submissions").then(function(d){
+          var keys=[]; d.submissions.forEach(function(s){ Object.keys(s.data).forEach(function(k){ if(keys.indexOf(k)<0) keys.push(k) }) });
+          var lab=function(k){ var x=fdef(k); return x?x.label:k };
+          var cell=function(v){ return Array.isArray(v)?v.join(", "):v===1&&true?"Yes":v===0?"No":String(v==null?"":v) };
+          h.innerHTML='<section class="panel"><h2 class="sec">Sign-ups <span class="actions"><span class="hint">'+d.submissions.length+(d.submissions.length===100?"+":"")+'</span>'+(d.submissions.length?'<button class="btn sm" type="button" id="subCsv">Export CSV</button>':'')+'</span></h2>'+
+            (d.submissions.length ? '<div class="tablewrap"><table><thead><tr><th>When</th><th>Email</th>'+keys.map(function(k){return '<th>'+esc(lab(k))+'</th>'}).join("")+'<th>From</th></tr></thead><tbody>'+d.submissions.map(function(s){
+              var host=""; try{ host=s.page_url?new URL(s.page_url).hostname:"" }catch(e){}
+              return '<tr><td class="mono">'+fmtDate(s.created_at,true)+'</td><td>'+(s.contact_id?'<a href="#/contacts" data-contact="'+esc(s.contact_id)+'">'+esc(s.email||"")+'</a>':esc(s.email||"—"))+'</td>'+keys.map(function(k){ return '<td>'+esc(cell(s.data[k]))+'</td>' }).join("")+'<td class="mono">'+esc(host||"—")+'</td></tr>' }).join("")+'</tbody></table></div>'
+              : '<div class="empty">No sign-ups yet.</div>')+'</section>';
+          $$("[data-contact]",h).forEach(function(a){ a.onclick=function(e){ e.preventDefault(); store("studio.openContact",a.dataset.contact); go("#/contacts") } });
+          var cb=$("#subCsv"); if(cb) cb.onclick=function(){ api("GET","forms/"+fid+"/submissions?limit=2000").then(function(all){
+            var lines=[["when","email"].concat(keys.map(lab)).concat(["page"]).map(csvCell).join(",")].concat(all.submissions.map(function(s){ return [new Date(s.created_at).toISOString(), s.email||""].concat(keys.map(function(k){ return cell(s.data[k]) })).concat([s.page_url||""]).map(csvCell).join(",") }));
+            var blob=new Blob([lines.join("\n")],{type:"text/csv"}), a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=slugify(f.name)+"-signups.csv"; document.body.appendChild(a); a.click(); a.remove() }) };
+        }).catch(function(e){ h.innerHTML='<div class="notice danger"><p>'+esc(e.message)+'</p></div>' });
+      } else {
+        h.innerHTML='<div class="proof"><div class="proofbar"><span class="url">'+esc(goBase+'/f/'+fid)+'</span></div><iframe id="fPv" title="Form preview" style="height:520px;background:#fff" src="'+esc(goBase+'/f/'+fid+'?preview=1&t='+Date.now())+'"></iframe></div>'+
+          (f.status!=="active"?'<p class="hint">This form is off, so the preview shows nothing until you switch it on.</p>':'<p class="hint">The preview doesn’t save anything.</p>');
+      }
+    }
+    showTab();
+  });
+}
+
+/* ============ smart list rules ============ */
+var STATUS_OPTS=[["subscribed","Subscribed"],["unsubscribed","Unsubscribed"],["pending","Waiting to confirm"],["bounced","Bounced"],["complained","Marked as spam"]];
+function ruleFields(ctx){
+  var out=[
+    {k:"email",l:"Email",ops:[["contains","contains"],["ends_with","ends with"],["is","is"]],val:"text"},
+    {k:"name",l:"Name",ops:[["is_set","is filled in"],["not_set","is empty"],["contains","contains"]],val:"text"},
+    {k:"status",l:"Status",ops:[["is","is"],["is_not","is not"]],val:"select",opts:STATUS_OPTS},
+    {k:"signed_up",l:"Signed up",ops:[["in_last_days","in the last … days"],["more_than_days","more than … days ago"]],val:"number"},
+    {k:"list",l:"List",ops:[["in","is on"],["not_in","is not on"]],val:"select",opts:ctx.lists.map(function(l){return [l.id,l.name]})},
+    {k:"form",l:"Form",ops:[["submitted","filled in"],["not_submitted","hasn’t filled in"]],val:"select",opts:ctx.forms.map(function(f){return [f.id,f.name]})},
+    {k:"opened",l:"Opened an email",ops:[["in_last_days","in the last … days"],["not_in_last_days","not in the last … days"]],val:"number"},
+    {k:"clicked",l:"Clicked",ops:[["campaign","a link in"],["not_campaign","nothing in"],["in_last_days","any email link in the last … days"]],val:"campaign",opts:ctx.campaigns.filter(function(c){return c.status!=="draft"}).map(function(c){return [c.id,c.name]})},
+    {k:"came_from",l:"Came from a social post",ops:[["is","on"],["any","on any platform"]],val:"select",opts:PLAT_ORDER.map(function(p){return [p,platName(p)]})},
+    {k:"source",l:"Signed up on page",ops:[["contains","contains"]],val:"text"}
+  ];
+  ctx.fields.forEach(function(f){
+    var ops = f.type==="multiselect"?[["has","includes"],["has_not","doesn’t include"]] : f.type==="checkbox"?[["is_true","is ticked"],["is_false","isn’t ticked"]] : f.type==="number"?[["gt","is more than"],["lt","is less than"],["eq","is"]] : f.type==="date"?[["after","is after"],["before","is before"]] : [["is","is"],["is_not","is not"],["contains","contains"]];
+    ops=ops.concat([["is_set","is filled in"],["not_set","is empty"]]);
+    out.push({k:"field:"+f.key,l:f.label,ops:ops,val:(f.type==="select"||f.type==="multiselect")?"select":f.type==="number"?"number":f.type==="date"?"date":f.type==="checkbox"?"none":"text",opts:f.options.map(function(o){return [o,o]})});
+  });
+  return out;
+}
+var NO_VALUE=["is_set","not_set","is_true","is_false","any"];
+function loadRuleContext(){ return Promise.all([api("GET","lists"), api("GET","forms"), api("GET","campaigns"), loadFields(), loadSocialMeta().catch(function(){return null})]).then(function(r){ return {lists:r[0].lists, forms:r[1].forms, campaigns:r[2].campaigns, fields:r[3]} }) }
+function ruleSummary(rules, ctx){
+  var defs=ruleFields(ctx);
+  return rules.rules.map(function(r){ var d=defs.filter(function(x){return x.k===r.field})[0]; if(!d) return "?"; var op=(d.ops.filter(function(o){return o[0]===r.op})[0]||[,r.op])[1];
+    var val=NO_VALUE.indexOf(r.op)>-1?"":(d.opts&&(d.opts.filter(function(o){return o[0]===r.value})[0]||[])[1])||r.value||"";
+    return d.l+" "+(op.indexOf("…")>-1?op.replace("…",val):op+(val?" "+val:"")) }).join(rules.match==="any"?" or ":" and ") || "Everyone";
+}
+/** Rule builder. onSave(name, rules) → Promise. */
+function segmentEditor(host, ctx, seg, onSave, onCancel){
+  var rules=seg?JSON.parse(JSON.stringify(seg.rules)):{match:"all",rules:[{field:"status",op:"is",value:"subscribed"}]};
+  var defs=ruleFields(ctx), timer;
+  function valInput(r,i,d){
+    if(NO_VALUE.indexOf(r.op)>-1) return "";
+    if(d.val==="select"||d.val==="campaign"&&r.op!=="in_last_days") return '<select data-rv="'+i+'"><option value="">Choose…</option>'+(d.opts||[]).map(function(o){ return '<option value="'+esc(o[0])+'"'+(String(r.value)===String(o[0])?" selected":"")+'>'+esc(o[1])+'</option>' }).join("")+'</select>';
+    if(d.val==="number"||r.op==="in_last_days"||r.op==="more_than_days"||r.op==="not_in_last_days") return '<input type="number" min="0" data-rv="'+i+'" value="'+esc(r.value==null?"":r.value)+'" style="width:110px">';
+    if(d.val==="date") return '<input type="date" data-rv="'+i+'" value="'+esc(r.value||"")+'">';
+    return '<input type="text" data-rv="'+i+'" value="'+esc(r.value||"")+'" maxlength="200">';
+  }
+  function draw(){
+    host.innerHTML='<form class="drawer" id="sgF"><h2 class="sec">'+(seg?"Edit smart list":"New smart list")+'</h2>'+
+      '<div class="field"><label for="sgName">Name</label><input type="text" id="sgName" maxlength="60" value="'+esc(seg?seg.name:"")+'" placeholder="e.g. Irish launch clickers" required></div>'+
+      '<div class="actions"><span>People who match</span><select id="sgMatch" style="width:auto"><option value="all"'+(rules.match==="all"?" selected":"")+'>all</option><option value="any"'+(rules.match==="any"?" selected":"")+'>any</option></select><span>of these:</span></div>'+
+      '<div class="rules">'+rules.rules.map(function(r,i){ var d=defs.filter(function(x){return x.k===r.field})[0]||defs[0];
+        return '<div class="rule"><select data-rf="'+i+'">'+defs.map(function(x){ return '<option value="'+esc(x.k)+'"'+(x.k===d.k?" selected":"")+'>'+esc(x.l)+'</option>' }).join("")+'</select>'+
+          '<select data-ro="'+i+'">'+d.ops.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===r.op?" selected":"")+'>'+esc(o[1])+'</option>' }).join("")+'</select>'+valInput(r,i,d)+
+          '<button type="button" class="btn sm ghost" data-rx="'+i+'" aria-label="Remove rule">Remove</button></div>' }).join("")+'</div>'+
+      '<div class="actions"><button type="button" class="btn sm" id="sgAdd">Add a rule</button></div>'+
+      '<p class="sgcount" id="sgCount">Counting…</p>'+
+      '<div class="actions"><button class="btn primary" type="submit">'+(seg?"Save":"Create smart list")+'</button><button class="btn ghost" type="button" id="sgCancel">Cancel</button></div></form>';
+    $$("[data-rf]",host).forEach(function(s){ s.onchange=function(){ var i=Number(s.dataset.rf), d=defs.filter(function(x){return x.k===s.value})[0]; rules.rules[i]={field:d.k, op:d.ops[0][0], value:""}; draw() } });
+    $$("[data-ro]",host).forEach(function(s){ s.onchange=function(){ var i=Number(s.dataset.ro); rules.rules[i].op=s.value; draw() } });
+    $$("[data-rv]",host).forEach(function(s){ s.oninput=s.onchange=function(){ rules.rules[Number(s.dataset.rv)].value=s.value; count() } });
+    $$("[data-rx]",host).forEach(function(b){ b.onclick=function(){ rules.rules.splice(Number(b.dataset.rx),1); draw() } });
+    $("#sgMatch",host).onchange=function(){ rules.match=this.value; count() };
+    $("#sgAdd",host).onclick=function(){ rules.rules.push({field:"email",op:"contains",value:""}); draw() };
+    $("#sgCancel",host).onclick=onCancel;
+    $("#sgF",host).onsubmit=function(e){ e.preventDefault(); var b=this.querySelector("[type=submit]"); b.disabled=true; onSave($("#sgName",host).value, rules).catch(function(err){ b.disabled=false; toast(err.message,true) }) };
+    count();
+  }
+  function ready(){ return rules.rules.filter(function(r){ return NO_VALUE.indexOf(r.op)>-1 || (r.value!==""&&r.value!=null) }) }
+  function count(){ clearTimeout(timer); timer=setTimeout(function(){
+    var el=$("#sgCount",host); if(!el) return;
+    api("POST","segments/preview",{rules:{match:rules.match, rules:ready()}}).then(function(d){ if(!$("#sgCount",host)) return;
+      el.innerHTML='<b>'+d.count+'</b> '+(d.count===1?"person matches":"people match")+' · '+d.subscribed+' subscribed'+(d.sample.length?'<span class="hint"> · e.g. '+d.sample.map(function(x){return esc(x.name||x.email)}).join(", ")+'</span>':'') })
+      .catch(function(e){ if($("#sgCount",host)) el.textContent=e.message }) },300) }
+  S.cleanup.push(function(){ clearTimeout(timer) });
+  draw();
 }
 
 /* ============ emails ============ */
@@ -577,10 +816,10 @@ function emailsView(){
 }
 
 function emailView(cid){
-  return Promise.all([api("GET","campaigns/"+cid), api("GET","lists"), api("GET","sites")]).then(function(r){
-    var cp=r[0].campaign, stats=r[0].stats||{}, audience=r[0].audience, lists=r[1].lists, sites=r[2].sites;
+  return Promise.all([api("GET","campaigns/"+cid), api("GET","lists"), api("GET","sites"), api("GET","segments")]).then(function(r){
+    var cp=r[0].campaign, stats=r[0].stats||{}, audience=r[0].audience, lists=r[1].lists, sites=r[2].sites, segs=r[3].segments;
     var v=$("#view"), editable = cp.status==="draft"||cp.status==="scheduled";
-    var listLabel=function(id){ var l=lists.filter(function(x){return x.id===id})[0]; return l? l.name : "Everyone subscribed" };
+    var listLabel=function(id){ if(id&&id.indexOf("seg:")===0){ var g=segs.filter(function(x){return "seg:"+x.id===id})[0]; return g? g.name+" (smart list)" : "a smart list" } var l=lists.filter(function(x){return x.id===id})[0]; return l? l.name : "Everyone subscribed" };
     var html='<div class="pagehead"><div><span class="eyebrow"><a href="#/emails" style="color:inherit;text-decoration:none">Emails</a> · '+esc(cp.status)+'</span><h1 id="cpTitle">'+esc(cp.name)+'</h1><p class="sub"><span class="chip '+esc(cp.status)+'">'+esc(cp.status)+'</span> '+
       (cp.status==="scheduled" ? "Goes out "+fmtDate(cp.scheduled_at,true) : cp.sent_at ? "Sent "+fmtDate(cp.sent_at,true)+" to "+esc(listLabel(cp.list_id)) : "")+'</p></div>'+
       '<div class="actions"><button class="btn" type="button" id="dupBtn">Duplicate</button>'+(cp.status!=="sending"?'<button class="btn danger" type="button" id="delBtn">Delete</button>':'')+'</div></div><div id="delConfirm"></div>';
@@ -597,7 +836,7 @@ function emailView(cid){
     } else {
       html+=emailBanner()+'<div class="editor"><form class="form panel" id="cpForm" autocomplete="off"><h2 class="sec">Compose <span class="saving" id="cpSave">Saved</span></h2>'+
         '<div class="field"><label for="cpName">Internal name</label><input type="text" id="cpName" maxlength="80" value="'+esc(cp.name)+'"><span class="hint">Only you see this.</span></div>'+
-        '<div class="fieldrow"><div class="field"><label for="cpList">Send to</label><select id="cpList"><option value="">Everyone subscribed</option>'+lists.map(function(l){ return '<option value="'+esc(l.id)+'"'+(cp.list_id===l.id?" selected":"")+'>'+esc(l.name)+' ('+l.subscribed+')</option>' }).join("")+'</select></div>'+
+        '<div class="fieldrow"><div class="field"><label for="cpList">Send to</label><select id="cpList"><option value="">Everyone subscribed</option><optgroup label="Lists">'+lists.map(function(l){ return '<option value="'+esc(l.id)+'"'+(cp.list_id===l.id?" selected":"")+'>'+esc(l.name)+' ('+l.subscribed+')</option>' }).join("")+'</optgroup>'+(segs.length?'<optgroup label="Smart lists">'+segs.map(function(g){ return '<option value="seg:'+esc(g.id)+'"'+(cp.segment_id===g.id?" selected":"")+'>'+esc(g.name)+' ('+g.subscribed+')</option>' }).join("")+'</optgroup>':'')+'</select></div>'+
         '<div class="field"><label for="cpSite">Styled as</label><select id="cpSite"><option value="">Just me</option>'+sites.map(function(s){ return '<option value="'+esc(s.id)+'"'+(cp.site_id===s.id?" selected":"")+'>'+esc(s.name)+'</option>' }).join("")+'</select></div></div>'+
         '<div class="field"><label for="cpSubj">Subject</label><input type="text" id="cpSubj" maxlength="150" value="'+esc(cp.subject)+'" placeholder="What’s in it for them?"></div>'+
         '<div class="field"><label for="cpPre">Preview line</label><input type="text" id="cpPre" maxlength="200" value="'+esc(cp.preheader)+'"><span class="hint">The grey text after the subject in most inboxes.</span></div>'+
@@ -610,7 +849,7 @@ function emailView(cid){
         '<div class="proof email"><div class="proofbar"><span class="url">inbox view</span></div><iframe id="pv" title="Email preview" sandbox=""></iframe></div></div>';
       v.innerHTML=html;
       imageButton($("#cpBody"), $("#cpBody").nextElementSibling);
-      var showAudience=function(n){ audience=n; $("#audience").textContent = "Goes to "+n+" subscribed "+(n===1?"person":"people")+" on “"+listLabel($("#cpList").value||null)+"”. Unsubscribed people are always left out." };
+      var showAudience=function(n){ audience=n; var val=$("#cpList").value||null; $("#audience").textContent = "Goes to "+n+" subscribed "+(n===1?"person":"people")+" "+(val&&val.indexOf("seg:")===0?"in":"on")+" “"+listLabel(val)+"”"+(val&&val.indexOf("seg:")===0?", counted again at the moment it sends":"")+". Unsubscribed people are always left out." };
       showAudience(audience);
       var t; function preview(){ clearTimeout(t); t=setTimeout(function(){ emailPreview($("#pv"),{subject:$("#cpSubj").value, preheader:$("#cpPre").value, body:$("#cpBody").value, site_id:$("#cpSite").value||null}) },250) }
       S.cleanup.push(function(){ clearTimeout(t) });
@@ -619,7 +858,7 @@ function emailView(cid){
       $("#cpSubj").oninput=function(){ save({subject:this.value}); preview() };
       $("#cpPre").oninput=function(){ save({preheader:this.value}); preview() };
       $("#cpBody").oninput=function(){ save({body:this.value}); preview() };
-      $("#cpList").onchange=function(){ save({list_id:this.value||null}); save.now() };
+      $("#cpList").onchange=function(){ var val=this.value; if(val.indexOf("seg:")===0) save({segment_id:val.slice(4)}); else save({list_id:val||null}); save.now() };
       $("#cpSite").onchange=function(){ save({site_id:this.value||null}); save.now(); preview() };
       $("#testBtn").onclick=function(){
         var to=$("#cpTest").value.trim(), b=this; store("proof.testto",to); save.now(); b.disabled=true;

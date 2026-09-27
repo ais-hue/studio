@@ -4,6 +4,7 @@ import { processQueue, sendConfirmation } from "./email";
 import { exitAll, onCampaignClick, onListJoin, runSequences } from "./automation";
 import { handleResendWebhook } from "./hooks";
 import { followLink } from "./links";
+import { formToObject, handleFormPublic, loadForm, submitForm } from "./forms";
 
 export async function serveStatic(req: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(req.url);
@@ -66,6 +67,43 @@ export async function upsertContact(
   return { contactId: c.id, added, created, status: c.status, token: c.token, name: c.name };
 }
 
+/**
+ * Put someone on a list: handles double opt-in, custom field values, sign-up credit and welcome emails.
+ * Shared by page sign-ups, embedded forms and the forms API.
+ */
+export async function joinList(env: Env, ctx: ExecutionContext, o: {
+  email: string; name: string; source: string; listId: string; site: { name: string; accent: string } | null;
+  props?: Record<string, unknown>; sref?: string;
+}): Promise<{ status: "pending" | "subscribed"; contactId: string; created: boolean; welcome: boolean }> {
+  const settings = await getSettings(env);
+  const r = await upsertContact(env, o.email, o.name, o.source, settings.consent_text, o.listId, { pending: settings.double_optin === "1" });
+  if (o.props && Object.keys(o.props).length) {
+    await env.DB.prepare("UPDATE contacts SET props = json_patch(COALESCE(props, '{}'), ?), updated_at = ? WHERE id = ?").bind(JSON.stringify(o.props), now(), r.contactId).run();
+  }
+  // Credit a brand-new contact to the tracked link that brought them (first touch only).
+  const ref = String(o.sref || "").replace(/[^a-z0-9]/g, "").slice(0, 12);
+  if (r.created && ref && (await env.DB.prepare("SELECT 1 FROM links WHERE code = ?").bind(ref).first())) {
+    await env.DB.prepare("UPDATE contacts SET ref_link = ?, source = source || ? WHERE id = ?").bind(ref, " via link", r.contactId).run();
+  }
+  if (r.status === "pending") {
+    // At most one confirmation email per address every 10 minutes, so a form can't be used to flood someone.
+    const recent = await env.DB.prepare("SELECT 1 FROM sends WHERE kind = 'confirm' AND contact_id = ? AND created_at > ?").bind(r.contactId, now() - 600_000).first();
+    if (!recent) {
+      const sid = id("s_");
+      await env.DB.prepare("INSERT INTO sends (id, list_id, kind, contact_id, email, status, created_at) VALUES (?, ?, 'confirm', ?, ?, 'sent', ?)").bind(sid, o.listId, r.contactId, o.email, now()).run();
+      ctx.waitUntil(sendConfirmation(env, { email: o.email, name: r.name, token: r.token }, o.site).then((x) =>
+        env.DB.prepare("UPDATE sends SET status = ?, error = ?, sent_at = ? WHERE id = ?").bind(x.ok ? "sent" : "failed", x.error || null, x.ok ? now() : null, sid).run()));
+    }
+    return { status: "pending", contactId: r.contactId, created: r.created, welcome: false };
+  }
+  let welcome = false;
+  if (r.added && r.status === "subscribed") {
+    welcome = await onListJoin(env, o.listId, r.contactId, o.email);
+    if (welcome) ctx.waitUntil(sendNow(env));
+  }
+  return { status: "subscribed", contactId: r.contactId, created: r.created, welcome };
+}
+
 async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: string): Promise<Response> {
   const wantsJson = (req.headers.get("accept") || "").includes("application/json");
   const reply = (status: number, body: { message?: string; error?: string }, back?: string) => {
@@ -76,42 +114,38 @@ async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: st
   let form: FormData;
   try { form = await req.formData(); } catch { return reply(400, { error: "That form didn’t come through properly. Refresh and try again." }); }
   if (String(form.get("website") || "").trim()) return reply(200, { message: "You’re on the list." }); // bot trap
-  const email = String(form.get("email") || "").trim().toLowerCase();
-  const name = String(form.get("name") || "").trim().slice(0, 80);
   const pageId = String(form.get("page") || "");
-  if (!isEmail(email)) return reply(400, { error: "That email address doesn’t look right. Check it and try again." });
-  if (form.get("consent") !== "yes") return reply(400, { error: "Tick the box to say you’re happy to get emails." });
-
   const page = await env.DB.prepare("SELECT * FROM pages WHERE id = ?").bind(pageId).first<Page>();
   if (!page) return reply(404, { error: "This form has been taken down." });
   const site = await env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(page.site_id).first<Site>();
   if (!site || `${site.subdomain}.${env.ROOT_DOMAIN}` !== host) return reply(400, { error: "This form belongs to a different site." });
-
-  const settings = await getSettings(env);
-  const list = await siteList(env, site);
-  const r = await upsertContact(env, email, name, `${site.subdomain}/${page.slug || "home"}`, settings.consent_text, list.id, { pending: settings.double_optin === "1" });
-  // Credit a brand-new contact to the tracked link that brought them (first touch only).
-  const ref = String(form.get("sref") || "").replace(/[^a-z0-9]/g, "").slice(0, 12);
-  if (r.created && ref && (await env.DB.prepare("SELECT 1 FROM links WHERE code = ?").bind(ref).first())) {
-    await env.DB.prepare("UPDATE contacts SET ref_link = ?, source = source || ? WHERE id = ?").bind(ref, " via link", r.contactId).run();
-  }
   const back = new URL(req.headers.get("referer") || `https://${host}/`);
-  if (r.status === "pending") {
-    // At most one confirmation email per address every 10 minutes, so the form can't be used to flood someone.
-    const recent = await env.DB.prepare("SELECT 1 FROM sends WHERE kind = 'confirm' AND contact_id = ? AND created_at > ?").bind(r.contactId, now() - 600_000).first();
-    if (!recent) {
-      const sid = id("s_");
-      await env.DB.prepare("INSERT INTO sends (id, list_id, kind, contact_id, email, status, created_at) VALUES (?, ?, 'confirm', ?, ?, 'sent', ?)").bind(sid, list.id, r.contactId, email, now()).run();
-      ctx.waitUntil(sendConfirmation(env, { email, name: r.name, token: r.token }, site).then((x) =>
-        env.DB.prepare("UPDATE sends SET status = ?, error = ?, sent_at = ? WHERE id = ?").bind(x.ok ? "sent" : "failed", x.error || null, x.ok ? now() : null, sid).run()));
+
+  // A custom form placed on the page.
+  const formId = String(form.get("form") || "");
+  if (formId) {
+    const f = await loadForm(env, formId);
+    if (!f || f.status !== "active") return reply(404, { error: "This form has been switched off." });
+    try {
+      const r = await submitForm(env, ctx, f, formToObject(form), { pageUrl: back.toString(), ip: req.headers.get("cf-connecting-ip") || "", source: `${site.subdomain}/${page.slug || "home"}` });
+      if (r.redirect && !wantsJson) return Response.redirect(r.redirect, 303);
+      back.searchParams.set("joined", r.status === "pending" ? "confirm" : "1");
+      return reply(200, { message: r.message }, back.toString());
+    } catch (e) {
+      if (e instanceof HttpError) return reply(e.status, { error: e.message });
+      throw e;
     }
+  }
+
+  const email = String(form.get("email") || "").trim().toLowerCase();
+  const name = String(form.get("name") || "").trim().slice(0, 80);
+  if (!isEmail(email)) return reply(400, { error: "That email address doesn’t look right. Check it and try again." });
+  if (form.get("consent") !== "yes") return reply(400, { error: "Tick the box to say you’re happy to get emails." });
+  const list = await siteList(env, site);
+  const r = await joinList(env, ctx, { email, name, source: `${site.subdomain}/${page.slug || "home"}`, listId: list.id, site, sref: String(form.get("sref") || "") });
+  if (r.status === "pending") {
     back.searchParams.set("joined", "confirm");
     return reply(200, { message: "Almost there. Check your inbox and tap the link to confirm." }, back.toString());
-  }
-  let welcome = false;
-  if (r.added && r.status === "subscribed") {
-    welcome = await onListJoin(env, list.id, r.contactId, email);
-    if (welcome) ctx.waitUntil(sendNow(env));
   }
   back.searchParams.set("joined", "1");
   return reply(200, { message: list.welcome_enabled ? "You’re on the list. Check your inbox." : "You’re on the list." }, back.toString());
@@ -151,6 +185,7 @@ async function handleGo(req: Request, env: Env, ctx: ExecutionContext, url: URL,
   if (parts[0] === "hooks" && parts[1] === "resend" && req.method === "POST") return handleResendWebhook(req, env);
   if (parts[0] === "confirm" && parts[1]) return confirm(req, env, ctx, parts[1], o);
   if (parts[0] === "l" && parts[1]) return followLink(req, env, ctx, parts[1]);
+  if (parts[0] === "f" && parts[1]) return handleFormPublic(req, env, ctx, parts[1]);
   if (parts[0] === "o" && parts[1]) {
     const sid = parts[1].replace(/\.gif$/, "");
     await env.DB.prepare("UPDATE sends SET opened_at = COALESCE(opened_at, ?) WHERE id = ?").bind(now(), sid).run();
@@ -224,6 +259,8 @@ export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext
   if (req.method === "GET" && !/bot|crawl|spider|preview/i.test(req.headers.get("user-agent") || "")) {
     ctx.waitUntil(env.DB.prepare("UPDATE pages SET views = views + 1 WHERE id = ?").bind(page.id).run());
   }
+  const fid = (() => { try { return String(JSON.parse(page.content || "{}").form_id || ""); } catch { return ""; } })();
+  if (fid) { const f = await loadForm(env, fid); if (f && f.status === "active") o.form = f; }
   return html(renderPage(site, page, o), 200, { "cache-control": o.joined ? "no-store" : "public, max-age=30" });
 }
 

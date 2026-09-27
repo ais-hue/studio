@@ -1,5 +1,6 @@
 import { Env, accentOf, esc, getSettings, id, markdown, now, plainText, slugify } from "./util";
 import { tagUrl } from "./links";
+import { segmentWhere } from "./segments";
 import { runSequences } from "./automation";
 import { syncSocial } from "./social";
 import { cleanUploads } from "./files";
@@ -11,7 +12,7 @@ interface SendRow {
 }
 interface Campaign {
   id: string; name: string; subject: string; preheader: string; body: string;
-  list_id: string | null; site_id: string | null; status: string;
+  list_id: string | null; site_id: string | null; status: string; segment_id?: string | null;
 }
 
 export interface Rendered { subject: string; html: string; text: string; headers: Record<string, string> }
@@ -116,10 +117,13 @@ export async function sendTest(env: Env, c: Campaign, to: string): Promise<{ ok:
 /** Queue one send row per subscribed recipient. */
 export async function enqueueCampaign(env: Env, c: Campaign): Promise<number> {
   const t = now();
-  const sql = c.list_id
-    ? `SELECT c.id, c.email FROM contacts c JOIN list_members m ON m.contact_id = c.id WHERE m.list_id = ? AND c.status = 'subscribed'`
-    : `SELECT id, email FROM contacts WHERE status = 'subscribed'`;
-  const stmt = c.list_id ? env.DB.prepare(sql).bind(c.list_id) : env.DB.prepare(sql);
+  let stmt: D1PreparedStatement;
+  if (c.segment_id) {
+    const w = await segmentWhere(env, c.segment_id);
+    stmt = env.DB.prepare(`SELECT c.id, c.email FROM contacts c WHERE c.status = 'subscribed' AND ${w.sql}`).bind(...w.params);
+  } else if (c.list_id) {
+    stmt = env.DB.prepare(`SELECT c.id, c.email FROM contacts c JOIN list_members m ON m.contact_id = c.id WHERE m.list_id = ? AND c.status = 'subscribed'`).bind(c.list_id);
+  } else stmt = env.DB.prepare(`SELECT id, email FROM contacts WHERE status = 'subscribed'`);
   const { results } = await stmt.all<{ id: string; email: string }>();
   const ins = env.DB.prepare("INSERT INTO sends (id, campaign_id, kind, contact_id, email, created_at) VALUES (?, ?, 'campaign', ?, ?, ?)");
   for (let i = 0; i < results.length; i += 50) {

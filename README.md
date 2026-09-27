@@ -9,6 +9,8 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 ## How email flows
 
 - **Sign-ups** land on the site's list. With double opt-in on (Settings), they wait as "pending" until they tap the link sent to `go.<domain>/confirm/…`.
+- **Forms** (`src/forms.ts`) pick fields (email, name, custom contact fields) and add people to a list. They work on Studio pages, embedded anywhere (`go.<domain>/f/<id>.js` or an iframe of `go.<domain>/f/<id>`), or posted to as JSON by apps. Custom answers are stored in `contacts.props`.
+- **Smart lists** (`src/segments.ts`) are saved rules compiled to SQL when used: in Contacts, and as a campaign audience (counted at send time).
 - **Automations** start when someone joins a list, clicks a link in a campaign, or is added by hand. The every-minute cron moves people along and queues each email; the send queue delivers it.
 - **Social posts** go out through Zernio (zernio.com). Brands are Zernio profiles; drafts live in Studio, and scheduled posts are handed to Zernio and checked on by the cron.
 - **Tracked links**: links in social posts become `go.<domain>/l/<code>` (UTM-tagged; bots ignored). Links to Studio sites carry `sref=<code>`, which the signup form sends back so the new contact is credited to that post and platform. No cookies.

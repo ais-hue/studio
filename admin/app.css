@@ -466,3 +466,22 @@ h3.mini{margin:0;font-size:13px;font-weight:600;display:flex;gap:10px;align-item
 .suggest{margin:0;font-size:13px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .plat .pu{white-space:normal}
 .tabs #renameBrand{margin-left:auto;color:var(--t3);font-size:12.5px;font-weight:400}.tabs #renameBrand:hover{color:var(--t1)}
+
+/* ---------- forms & smart lists ---------- */
+.ffields{display:flex;flex-direction:column;border:1px solid var(--line)}
+.ffield{display:flex;align-items:center;gap:10px 14px;padding:9px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ffield:last-child{border-bottom:0}
+.ffield .t{flex:1 1 160px;min-width:0;font-size:13.5px;font-weight:500}
+.ffield .t small{display:block;font-weight:400;font-size:12px;color:var(--t3)}
+.ffacts{display:flex;gap:2px}
+.ffacts .btn{padding:4px 8px}
+textarea.snippet{min-height:0;height:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre;overflow-x:auto;resize:vertical}
+#snJs,#snIf{height:74px}#snApi{height:110px}#snSw{height:150px;margin:8px 0}
+.rules{display:flex;flex-direction:column;gap:8px}
+.rule{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);background:var(--soft)}
+.rule select,.rule input{width:auto;flex:1 1 140px;min-width:0}
+.rule input[type=number]{flex:0 1 110px}
+.sgcount{margin:0;font-size:13.5px;padding:10px 12px;border-left:3px solid var(--coral);background:var(--soft)}
+.sgcount b{font-size:16px}
+input[type=date]{background:var(--field);border:1px solid var(--line2);padding:7px 10px;font-size:13.5px;color:var(--t1)}
+details summary{list-style-position:outside}
