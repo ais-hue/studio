@@ -146,16 +146,21 @@ export async function pinterestBoards(env: Env, accountId: string): Promise<Arra
   return list.map((b: any) => ({ id: String(b.id || b._id || b.boardId), name: String(b.name || b.title || "Board") }));
 }
 
-export async function tiktokInfo(env: Env, accountId: string): Promise<{ privacy: string[]; maxDuration: number | null; commentsOff: boolean; duetOff: boolean; stitchOff: boolean }> {
-  if (await mock(env)) return { privacy: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"], maxDuration: 600, commentsOff: false, duetOff: false, stitchOff: false };
-  const d = await call(env, "GET", `/accounts/${encodeURIComponent(accountId)}/tiktok-creator-info`);
-  const c = d.creatorInfo || d.data || d;
+export async function tiktokInfo(env: Env, accountId: string, mediaType?: string): Promise<{ privacy: string[]; labels: Record<string, string>; maxDuration: number | null; commentsOff: boolean; duetOff: boolean; stitchOff: boolean; canPostMore: boolean }> {
+  if (await mock(env)) return { privacy: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"], labels: {}, maxDuration: 600, commentsOff: false, duetOff: false, stitchOff: false, canPostMore: true };
+  const q = mediaType === "photo" || mediaType === "video" ? `?mediaType=${mediaType}` : "";
+  const d = await call(env, "GET", `/accounts/${encodeURIComponent(accountId)}/tiktok/creator-info${q}`);
+  const levels: any[] = Array.isArray(d.privacyLevels) ? d.privacyLevels : Array.isArray(d.privacy_level_options) ? d.privacy_level_options.map((v: string) => ({ value: v })) : [];
+  const privacy = levels.map((x) => String(x.value ?? x)).filter(Boolean);
+  const labels: Record<string, string> = {};
+  for (const x of levels) if (x && x.value && x.label) labels[String(x.value)] = String(x.label);
+  const ia = d.postingLimits?.interactionSettings || {};
+  const off = (k: string) => ia[k] ? ia[k].enabled === false : false;
   return {
-    privacy: Array.isArray(c.privacy_level_options) ? c.privacy_level_options : Array.isArray(c.privacyLevelOptions) ? c.privacyLevelOptions : ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
-    maxDuration: Number(c.max_video_post_duration_sec || c.maxVideoPostDurationSec) || null,
-    commentsOff: !!(c.comment_disabled ?? c.commentDisabled),
-    duetOff: !!(c.duet_disabled ?? c.duetDisabled),
-    stitchOff: !!(c.stitch_disabled ?? c.stitchDisabled),
+    privacy: privacy.length ? privacy : ["PUBLIC_TO_EVERYONE", "SELF_ONLY"], labels,
+    maxDuration: Number(d.postingLimits?.maxVideoDurationSec) || null,
+    commentsOff: off("allow_comment"), duetOff: off("allow_duet"), stitchOff: off("allow_stitch"),
+    canPostMore: d.creator?.canPostMore !== false,
   };
 }
 

@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609270322";
+var VERSION = "202609270340";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1578,8 +1578,12 @@ function socialPostView(pid){
         }
         if($("#tkPriv")){
           var ta=acctFor("tiktok"), labels={PUBLIC_TO_EVERYONE:"Everyone",MUTUAL_FOLLOW_FRIENDS:"Friends (people who follow each other)",FOLLOWER_OF_CREATOR:"Followers",SELF_ONLY:"Only me"};
-          api("GET","social/accounts/"+ta._id+"/tiktok").then(function(d){ var s=$("#tkPriv"); if(!s) return; s.innerHTML='<option value="">Choose</option>'+d.info.privacy.map(function(x){ return '<option value="'+esc(x)+'"'+(p.options.tiktok.privacy_level===x?" selected":"")+'>'+esc(labels[x]||x)+'</option>' }).join("");
-            if(d.info.commentsOff){ var c=$("#tkCom"); c.checked=false; c.disabled=true } }).catch(function(e){ toast(e.message,true) });
+          var mt=p.media.some(function(m){return m.type==="video"})?"video":p.media.length?"photo":"";
+          api("GET","social/accounts/"+ta._id+"/tiktok"+(mt?"?media="+mt:"")).then(function(d){ var s=$("#tkPriv"); if(!s) return; s.innerHTML='<option value="">Choose</option>'+d.info.privacy.map(function(x){ return '<option value="'+esc(x)+'"'+(p.options.tiktok.privacy_level===x?" selected":"")+'>'+esc(labels[x]||d.info.labels[x]||x)+'</option>' }).join("");
+            if(d.info.commentsOff){ var c=$("#tkCom"); c.checked=false; c.disabled=true }
+            ["Duet","Stitch"].forEach(function(k){ var el=$("#tk"+k); if(el&&d.info[k.toLowerCase()+"Off"]){ el.checked=false; el.disabled=true; p.options.tiktok["allow_"+k.toLowerCase()]=false } });
+            if(!d.info.canPostMore) toast("TikTok says this account has hit its posting limit for today. Try again tomorrow.",true);
+          }).catch(function(e){ var s=$("#tkPriv"); if(s) s.innerHTML='<option value="">Couldn’t load TikTok’s options</option>'; toast(e.message,true) });
           $("#tkPriv").onchange=function(){ p.options.tiktok.privacy_level=this.value; setO(); save.now() };
           $("#tkCom").onchange=function(){ p.options.tiktok.allow_comment=this.checked; setO(); save.now() };
           if($("#tkDuet")) $("#tkDuet").onchange=function(){ p.options.tiktok.allow_duet=this.checked; setO(); save.now() };

@@ -867,7 +867,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     }
     if (s1 === "accounts" && s2 && !s3 && m === "DELETE") { await disconnect(env, s2); return json({ ok: true }); }
     if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
-    if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2) });
+    if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2, str(url.searchParams.get("media"), 10)) });
     if (s1 === "media" && m === "POST") return json({ media: await uploadMedia(env, req) }, 201);
 
     if (s1 === "posts") {
