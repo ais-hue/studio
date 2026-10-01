@@ -1,12 +1,20 @@
 import { Env, HttpError, id, now } from "./util";
 import { trackText } from "./links";
 import { tagFor } from "./initiatives";
+import { storeBytes, fileUrl } from "./files";
+import {
+  PROVIDERS, isDirect, directReady, listDirect, startConnect, disconnectDirect, directBoards, directTiktokInfo,
+  enqueue, retryFailed, cancelQueued, moveQueued, hasDeliveries, runDeliveries, combine,
+} from "./direct/engine";
 
 /*
- * Social posting through Zernio (zernio.com). Brands are Zernio profiles, each holding at most one account
- * per platform. Studio keeps its own copy of every post (drafts live only here); scheduling and publishing
- * are handed to Zernio, and the every-minute cron checks back on posts that are due.
- * With DEV_AUTH=1 and no key, a pretend Zernio is used so the screens can be tried locally.
+ * Social posting. Each connected account posts one of two ways:
+ * - straight from Studio, through Studio's own developer app on that platform (src/direct/), or
+ * - through Zernio (zernio.com), for platforms Studio doesn't post to itself yet.
+ * Brands are Studio's own (ids br_…) or Zernio profiles; either kind can hold accounts of both sorts.
+ * Studio keeps its own copy of every post (drafts live only here). The direct half of a post is worked through
+ * by the every-minute cron; the Zernio half is handed to Zernio and checked on by the same cron.
+ * With DEV_AUTH=1 and no Zernio key, a pretend Zernio is used so the screens can be tried locally.
  */
 
 const BASE = "https://zernio.com/api/v1";
@@ -25,6 +33,7 @@ export const PLATFORMS: Record<string, { name: string; limit: number; needsMedia
 export interface SocialPost {
   id: string; profile_id: string; content: string; media: string; targets: string; options: string;
   status: string; scheduled_at: number | null; published_at: number | null; zernio_id: string | null;
+  zernio_status?: string | null; zernio_results?: string | null;
   results: string; error: string | null; created_at: number; updated_at: number;
 }
 
@@ -35,10 +44,13 @@ export async function zernioKey(env: Env): Promise<string> {
 }
 const mock = async (env: Env) => env.DEV_AUTH === "1" && !(await zernioKey(env));
 
-export async function socialReady(env: Env): Promise<{ connected: boolean; simulated: boolean }> {
+export async function socialReady(env: Env): Promise<{ connected: boolean; simulated: boolean; zernio: boolean }> {
   const key = await zernioKey(env);
-  return { connected: !!key || env.DEV_AUTH === "1", simulated: !key && env.DEV_AUTH === "1" };
+  // Bluesky needs no setup, so Studio can always post somewhere.
+  return { connected: true, simulated: !key && env.DEV_AUTH === "1", zernio: !!key };
 }
+const zernioOn = async (env: Env) => !!(await zernioKey(env)) || (await mock(env));
+const ownBrand = (profileId: string) => profileId.startsWith("br_");
 
 async function call<T = any>(env: Env, method: string, path: string, body?: unknown, key?: string): Promise<T> {
   const k = key || (await zernioKey(env));
@@ -76,19 +88,26 @@ const mockAccounts = new Map<string, any>([
 
 /* ---------- brands and accounts ---------- */
 export async function listProfiles(env: Env): Promise<Array<{ _id: string; name: string }>> {
-  let out: Array<{ _id: string; name: string }>;
+  let out: Array<{ _id: string; name: string }> = [];
   if (await mock(env)) out = MOCK_PROFILES.map((p) => ({ ...p }));
-  else {
+  else if (await zernioKey(env)) {
     const d = await call(env, "GET", "/profiles?limit=100");
     const list = Array.isArray(d) ? d : d.profiles || d.data || [];
     out = list.map((p: any) => ({ _id: String(p._id || p.id), name: String(p.name || "Untitled") }));
   }
+  const { results: own } = await env.DB.prepare("SELECT id, name FROM social_brands ORDER BY created_at").all<{ id: string; name: string }>();
+  out.push(...own.map((b) => ({ _id: b.id, name: b.name })));
   const { results } = await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'brandname:%'").all<{ key: string; value: string }>();
   for (const r of results) { const b = out.find((x) => x._id === r.key.slice(10)); if (b) b.name = r.value; }
   return out;
 }
 
 export async function createProfile(env: Env, name: string): Promise<{ _id: string; name: string }> {
+  if (!(await zernioOn(env))) {
+    const b = { _id: id("br_"), name };
+    await env.DB.prepare("INSERT INTO social_brands (id, name, created_at) VALUES (?, ?, ?)").bind(b._id, name, now()).run();
+    return b;
+  }
   if (await mock(env)) { const p = { _id: id("pf_"), name }; MOCK_PROFILES.push(p); return p; }
   const d = await call(env, "POST", "/profiles", { name });
   const p = d.profile || d;
@@ -97,6 +116,10 @@ export async function createProfile(env: Env, name: string): Promise<{ _id: stri
 
 /** Rename a brand. Studio keeps the name itself; Zernio is updated too when it allows it. */
 export async function renameProfile(env: Env, profileId: string, name: string): Promise<{ _id: string; name: string }> {
+  if (ownBrand(profileId)) {
+    await env.DB.prepare("UPDATE social_brands SET name = ? WHERE id = ?").bind(name, profileId).run();
+    return { _id: profileId, name };
+  }
   await env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind("brandname:" + profileId, name).run();
   if (!(await mock(env))) {
     try { await call(env, "PATCH", `/profiles/${encodeURIComponent(profileId)}`, { name }); }
@@ -105,25 +128,42 @@ export async function renameProfile(env: Env, profileId: string, name: string): 
   return { _id: profileId, name };
 }
 
-export async function listAccounts(env: Env, profileId: string): Promise<Array<{ _id: string; platform: string; username: string; displayName: string; picture: string; active: boolean }>> {
-  const raw = (await mock(env))
-    ? [...mockAccounts.values()].filter((a) => a.profileId === profileId)
-    : (() => null)();
-  let list: any[] = raw || [];
-  if (!raw) {
-    const d = await call(env, "GET", `/accounts?profileId=${encodeURIComponent(profileId)}`);
-    list = Array.isArray(d) ? d : d.accounts || d.data || [];
+export interface SocialAccount { _id: string; platform: string; username: string; displayName: string; picture: string; active: boolean; via: "studio" | "zernio"; note?: string }
+
+/** A brand's accounts. Where an account is connected both ways, the direct one is used. */
+export async function listAccounts(env: Env, profileId: string): Promise<SocialAccount[]> {
+  const direct = await listDirect(env, profileId);
+  let list: any[] = [];
+  if (!ownBrand(profileId)) {
+    if (await mock(env)) list = [...mockAccounts.values()].filter((a) => a.profileId === profileId);
+    else if (await zernioKey(env)) {
+      const d = await call(env, "GET", `/accounts?profileId=${encodeURIComponent(profileId)}`);
+      list = Array.isArray(d) ? d : d.accounts || d.data || [];
+    }
   }
-  return list
+  const viaZernio: SocialAccount[] = list
     .filter((a: any) => !a.profileId || String(a.profileId?._id || a.profileId) === profileId)
     .map((a: any) => ({
       _id: String(a._id || a.id), platform: String(a.platform), username: String(a.username || a.displayName || ""),
-      displayName: String(a.displayName || a.username || ""), picture: String(a.profilePicture || ""), active: a.isActive !== false,
-    }));
+      displayName: String(a.displayName || a.username || ""), picture: String(a.profilePicture || ""), active: a.isActive !== false, via: "zernio" as const,
+    }))
+    .filter((a) => !direct.some((x) => x.platform === a.platform));
+  return [...direct, ...viaZernio].sort((a, b) => Object.keys(PLATFORMS).indexOf(a.platform) - Object.keys(PLATFORMS).indexOf(b.platform));
+}
+
+/** How a platform connects for a brand right now: Studio's log-in screen, an app password, Zernio, or not at all. */
+export async function connectMode(env: Env, platform: string, profileId: string): Promise<"studio" | "password" | "zernio" | "none"> {
+  if (await directReady(env, platform)) return PROVIDERS[platform].kind === "password" ? "password" : "studio";
+  if (!ownBrand(profileId) && (await zernioOn(env)) && PLATFORMS[platform]) return "zernio";
+  return "none";
 }
 
 export async function connectUrl(env: Env, platform: string, profileId: string, back: string): Promise<string> {
   if (!PLATFORMS[platform]) throw new HttpError(400, "Studio doesn’t post to that platform yet.");
+  const mode = await connectMode(env, platform, profileId);
+  if (mode === "studio") return startConnect(env, platform, profileId, new URL(back).origin);
+  if (mode === "password") throw new HttpError(400, `${PLATFORMS[platform].name} connects with an app password.`);
+  if (mode === "none") throw new HttpError(409, `Set up Studio’s ${PLATFORMS[platform].name} app in Settings to connect it.`);
   if (await mock(env)) {
     const acc = { _id: id("ac_"), platform, username: `ciunas_${platform}`, displayName: "Ciúnas", profileId, isActive: true };
     mockAccounts.set(acc._id, acc);
@@ -136,11 +176,13 @@ export async function connectUrl(env: Env, platform: string, profileId: string, 
 }
 
 export async function disconnect(env: Env, accountId: string): Promise<void> {
+  if (isDirect(accountId)) return disconnectDirect(env, accountId);
   if (await mock(env)) { mockAccounts.delete(accountId); return; }
   await call(env, "DELETE", `/accounts/${encodeURIComponent(accountId)}`);
 }
 
 export async function pinterestBoards(env: Env, accountId: string): Promise<Array<{ id: string; name: string }>> {
+  if (isDirect(accountId)) return directBoards(env, accountId);
   if (await mock(env)) return [{ id: "b1", name: "Ciúnas moodboard" }, { id: "b2", name: "Launch" }];
   const d = await call(env, "GET", `/accounts/${encodeURIComponent(accountId)}/pinterest-boards`);
   const list = Array.isArray(d) ? d : d.boards || d.data || d.items || [];
@@ -148,6 +190,7 @@ export async function pinterestBoards(env: Env, accountId: string): Promise<Arra
 }
 
 export async function tiktokInfo(env: Env, accountId: string, mediaType?: string): Promise<{ privacy: string[]; labels: Record<string, string>; maxDuration: number | null; commentsOff: boolean; duetOff: boolean; stitchOff: boolean; canPostMore: boolean }> {
+  if (isDirect(accountId)) return directTiktokInfo(env, accountId);
   if (await mock(env)) return { privacy: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"], labels: {}, maxDuration: 600, commentsOff: false, duetOff: false, stitchOff: false, canPostMore: true };
   const q = mediaType === "photo" || mediaType === "video" ? `?mediaType=${mediaType}` : "";
   const d = await call(env, "GET", `/accounts/${encodeURIComponent(accountId)}/tiktok/creator-info${q}`);
@@ -173,6 +216,10 @@ export async function uploadMedia(env: Env, req: Request): Promise<{ url: string
   if (!kind) throw new HttpError(400, "Only images and videos can be added.");
   const bytes = await req.arrayBuffer();
   if (!bytes.byteLength) throw new HttpError(400, "That file is empty.");
+  if (env.FILES) {
+    const f = await storeBytes(env, new Uint8Array(bytes), { name, type, folder: "Social" });
+    return { url: fileUrl(env, f.key), type: kind, name };
+  }
   if (await mock(env)) return { url: `https://picsum.photos/seed/${encodeURIComponent(name)}/1080/1080`, type: kind, name };
   const p = await call(env, "POST", "/media/presign", { filename: name, contentType: type, size: bytes.byteLength });
   if (!p.uploadUrl || !p.publicUrl) throw new HttpError(502, "Zernio didn’t give Studio somewhere to upload the file.");
@@ -206,12 +253,14 @@ export function problems(p: SocialPost): string[] {
       if (media.some((m) => m.type === "video") && media.length > 1) out.push("TikTok takes one video, or photos only.");
     }
     if (t.platform === "instagram" && media.length > 10) out.push("Instagram carousels hold up to 10 items.");
+    if (t.platform === "bluesky" && (media.length > 4 || (media.some((m) => m.type === "video") && media.length > 1))) out.push("Bluesky takes up to 4 pictures, or one video.");
+    if (t.platform === "threads" && media.length > 20) out.push("Threads carousels hold up to 20 items.");
   }
   return [...new Set(out)];
 }
 
 async function payload(env: Env, p: SocialPost) {
-  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []);
+  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []).filter((t) => !isDirect(t.accountId));
   const media = parse<Array<{ url: string; type: string }>>(p.media, []);
   const opts = parse<any>(p.options, {});
   const hasVideo = media.some((m) => m.type === "video");
@@ -264,24 +313,49 @@ function applyResult(post: any): { status: string; results: string; published_at
   return { status, results: JSON.stringify(results), published_at: ["published", "partial"].includes(status) ? now() : null, error: errs.join(" · ") || null };
 }
 
+/** Store the Zernio half of a post, then work out the post's overall status. */
 async function save(env: Env, pid: string, r: { status: string; results: string; published_at: number | null; error: string | null }, zid?: string) {
-  await env.DB.prepare(`UPDATE social_posts SET status = ?, results = ?, error = ?, published_at = COALESCE(published_at, ?), zernio_id = COALESCE(?, zernio_id), updated_at = ? WHERE id = ?`)
-    .bind(r.status, r.results, r.error, r.published_at, zid || null, now(), pid).run();
+  await env.DB.prepare(`UPDATE social_posts SET zernio_status = ?, zernio_results = ?, zernio_id = COALESCE(?, zernio_id), updated_at = ? WHERE id = ?`)
+    .bind(r.status, r.results, zid || null, now(), pid).run();
+  await combine(env, pid);
 }
 
-/** Hand a post to Zernio: now, or at a time. */
+const split = (p: SocialPost) => {
+  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []);
+  return { direct: targets.filter((t) => isDirect(t.accountId)), zernio: targets.filter((t) => !isDirect(t.accountId)) };
+};
+async function brandName(env: Env, profileId: string): Promise<string> {
+  try { return (await listProfiles(env)).find((b) => b._id === profileId)?.name || ""; } catch { return ""; }
+}
+
+/** Send a post out: now, or at a time. Direct accounts are queued here; Zernio accounts are handed to Zernio. */
 export async function publish(env: Env, p: SocialPost, at: number | null): Promise<void> {
   const issues = problems(p);
   if (issues.length) throw new HttpError(400, issues[0]);
-  if (["failed", "partial"].includes(p.status) && p.zernio_id) return retry(env, p);
+  if (["failed", "partial"].includes(p.status) && (p.zernio_id || (await hasDeliveries(env, p.id)))) return retry(env, p);
   if (p.status !== "draft") throw new HttpError(409, "This post has already been handed over. Unschedule it first to change it.");
-  const when = at ? { scheduledFor: new Date(at).toISOString(), timezone: "UTC" } : { publishNow: true };
+  const parts = split(p);
   const t = now();
-  await env.DB.prepare("UPDATE social_posts SET status = 'publishing', scheduled_at = ?, error = NULL, updated_at = ? WHERE id = ?").bind(at || t, t, p.id).run();
+  await env.DB.prepare("UPDATE social_posts SET status = ?, scheduled_at = ?, error = NULL, results = '[]', zernio_status = NULL, zernio_results = NULL, zernio_id = NULL, published_at = NULL, updated_at = ? WHERE id = ?")
+    .bind(at ? "scheduled" : "publishing", at || t, t, p.id).run();
+  if (parts.direct.length) {
+    try { await enqueue(env, p as any, parts.direct, at, await brandName(env, p.profile_id)); }
+    catch (e) {
+      await env.DB.prepare("UPDATE social_posts SET status = 'draft', error = ?, updated_at = ? WHERE id = ?").bind((e as Error).message, now(), p.id).run();
+      throw e;
+    }
+  }
+  if (parts.zernio.length) await publishZernio(env, p, at);
+  else await combine(env, p.id);
+  if (!at && parts.direct.length) await runDeliveries(env, p.id);
+}
+
+async function publishZernio(env: Env, p: SocialPost, at: number | null): Promise<void> {
+  const when = at ? { scheduledFor: new Date(at).toISOString(), timezone: "UTC" } : { publishNow: true };
   try {
     let post: any;
     if (await mock(env)) {
-      const targets = parse<Array<{ platform: string }>>(p.targets, []);
+      const targets = split(p).zernio;
       console.log("Pretend Zernio post:", JSON.stringify(await payload(env, p)));
       post = { _id: id("zp_"), status: at ? "scheduled" : "published", platforms: targets.map((x) => ({ platform: x.platform, status: at ? "scheduled" : "published", platformPostUrl: at ? null : `https://example.com/${x.platform}/${p.id}` })) };
     } else {
@@ -292,22 +366,34 @@ export async function publish(env: Env, p: SocialPost, at: number | null): Promi
     if (at && r.status === "publishing") r.status = "scheduled";
     await save(env, p.id, r, String(post._id || post.id || ""));
   } catch (e) {
+    // Nothing has gone out yet, so take the whole post back to a draft (direct deliveries included).
+    await cancelQueued(env, p.id);
     await env.DB.prepare("UPDATE social_posts SET status = ?, error = ?, updated_at = ? WHERE id = ?").bind("draft", (e as Error).message, now(), p.id).run();
     throw e;
   }
 }
 
 async function retry(env: Env, p: SocialPost): Promise<void> {
-  if (await mock(env)) { await save(env, p.id, { status: "published", results: p.results, published_at: now(), error: null }); return; }
-  const d = await call(env, "POST", `/posts/${encodeURIComponent(p.zernio_id!)}/retry`);
-  await save(env, p.id, applyResult(d.post || d));
+  const direct = await retryFailed(env, p.id);
+  const zFailed = p.zernio_id && ["failed", "partial"].includes((p as any).zernio_status || p.status);
+  if (zFailed) {
+    if (await mock(env)) {
+      const zr = parse<any[]>((p as any).zernio_results || p.results, []).map((r) => ({ ...r, status: "published", error: null }));
+      await save(env, p.id, { status: "published", results: JSON.stringify(zr), published_at: now(), error: null });
+    } else {
+      const d = await call(env, "POST", `/posts/${encodeURIComponent(p.zernio_id!)}/retry`);
+      await save(env, p.id, applyResult(d.post || d));
+    }
+  }
+  if (direct) { await combine(env, p.id); await runDeliveries(env, p.id); }
 }
 
 /** Take a scheduled post back to a draft. */
 export async function unschedule(env: Env, p: SocialPost): Promise<void> {
   if (p.status !== "scheduled") throw new HttpError(409, "Only scheduled posts can be pulled back.");
+  if (!(await cancelQueued(env, p.id))) throw new HttpError(409, "This post has started going out, so it can’t be pulled back.");
   if (p.zernio_id && !(await mock(env))) await call(env, "DELETE", `/posts/${encodeURIComponent(p.zernio_id)}`);
-  await env.DB.prepare("UPDATE social_posts SET status = 'draft', zernio_id = NULL, results = '[]', error = NULL, updated_at = ? WHERE id = ?").bind(now(), p.id).run();
+  await env.DB.prepare("UPDATE social_posts SET status = 'draft', zernio_id = NULL, zernio_status = NULL, zernio_results = NULL, results = '[]', error = NULL, updated_at = ? WHERE id = ?").bind(now(), p.id).run();
 }
 
 /** Move a scheduled post to a new time. */
@@ -315,6 +401,7 @@ export async function reschedule(env: Env, p: SocialPost, at: number): Promise<v
   if (p.status !== "scheduled") throw new HttpError(409, "Only scheduled posts can be moved.");
   if (!(at > now() + 60_000)) throw new HttpError(400, "Pick a time at least a couple of minutes from now.");
   if (p.zernio_id && !(await mock(env))) await call(env, "PATCH", `/posts/${encodeURIComponent(p.zernio_id)}`, { scheduledFor: new Date(at).toISOString(), timezone: "UTC" });
+  await moveQueued(env, p.id, at);
   await env.DB.prepare("UPDATE social_posts SET scheduled_at = ?, updated_at = ? WHERE id = ?").bind(at, now(), p.id).run();
 }
 
@@ -384,7 +471,7 @@ export async function syncSocial(env: Env, onlyId?: string): Promise<number> {
   for (const p of rows) {
     try {
       if (simulated) {
-        const targets = parse<Array<{ platform: string }>>(p.targets, []);
+        const targets = split(p).zernio;
         await save(env, p.id, { status: "published", published_at: t, error: null,
           results: JSON.stringify(targets.map((x) => ({ platform: x.platform, status: "published", url: `https://example.com/${x.platform}/${p.id}`, error: null }))) });
       } else {

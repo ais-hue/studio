@@ -1,8 +1,9 @@
 import { Env, getSettings, now } from "./util";
 import { SocialPost, listProfiles, zernioKey } from "./social";
+import { directMetrics } from "./direct/engine";
 
 /*
- * Post performance. Every hour Studio asks Zernio for the numbers on recent posts and keeps them on each post,
+ * Post performance. Every hour Studio asks Zernio (and each platform, for posts it sent itself) for the numbers on recent posts and keeps them on each post,
  * per platform. From those it works out which days and times do best for each brand.
  */
 
@@ -30,8 +31,14 @@ function numbers(o: any): Record<string, number> {
 export const engagementOf = (m: Record<string, number>) => ENGAGE.reduce((a, k) => a + (m[k] || 0), 0);
 export const reachOf = (m: Record<string, number>) => REACH.reduce((a, k) => Math.max(a, m[k] || 0), 0);
 
-/** Pull fresh numbers from Zernio for posts from the last 90 days. */
+/** Pull fresh numbers for posts from the last 90 days: from Zernio, and from each platform for direct posts. */
 export async function syncMetrics(env: Env): Promise<number> {
+  const zernio = await syncZernioMetrics(env).catch((e) => { console.error("Zernio metrics:", e); return 0; });
+  const direct = await directMetrics(env).catch((e) => { console.error("Direct metrics:", e); return 0; });
+  return zernio + direct;
+}
+
+async function syncZernioMetrics(env: Env): Promise<number> {
   const t = now();
   const simulated = env.DEV_AUTH === "1" && !(await zernioKey(env));
   if (!simulated && !(await zernioKey(env))) return 0;
