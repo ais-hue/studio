@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202609271620";
+var VERSION = "202610010814";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1403,6 +1403,185 @@ function hashQuery(){ var i=location.hash.indexOf("?"); return new URLSearchPara
 function platName(p){ return (S.social&&S.social.platforms[p]&&S.social.platforms[p].name)||p }
 function loadSocialMeta(){ return S.social ? Promise.resolve(S.social) : api("GET","social/status").then(function(d){ S.social=d; return d }) }
 
+/* ============ bulk scheduling and import (Social page) ============ */
+function runBulk(action, list, onStep){
+  // list: ids, or {id, at} for "times". Sent 10 at a time so big batches don't time out.
+  var done=[], failed=[], i=0;
+  function next(){
+    if(i>=list.length) return Promise.resolve({done:done, failed:failed});
+    var chunk=list.slice(i,i+10); i+=chunk.length;
+    var body=action==="times"?{action:action, items:chunk}:{action:action, ids:chunk};
+    return api("POST","social/bulk",body).then(function(r){ done=done.concat(r.done); failed=failed.concat(r.failed); if(onStep) onStep(done.length+failed.length, list.length); return next() });
+  }
+  return next();
+}
+function bulkResult(r, verb){
+  if(r.done.length) toast(r.done.length+" post"+(r.done.length===1?"":"s")+" "+verb);
+  if(r.failed.length) toast(r.failed.length+" couldn’t be "+verb+": "+r.failed[0].error, true);
+}
+function bulkSetup(posts, brand){
+  var bar=$("#bulkBar"); if(!bar) return;
+  var byId={}; posts.forEach(function(p){ byId[p.id]=p });
+  function picked(){ return $$("[data-sel]:checked").map(function(x){ return byId[x.dataset.sel] }).filter(Boolean) }
+  function draw(){
+    var sel=picked(), drafts=sel.filter(function(p){return p.status==="draft"}), sched=sel.filter(function(p){return p.status==="scheduled"});
+    $$("[data-selall]").forEach(function(a){ var boxes=$$('[data-sel][data-grp="'+a.dataset.selall+'"]'); a.checked=boxes.length&&boxes.every(function(b){return b.checked}) });
+    if(!sel.length){ bar.hidden=true; bar.innerHTML=""; return }
+    bar.hidden=false;
+    var blocked=drafts.filter(function(p){return p.problems&&p.problems.length}).length;
+    var h='<span class="bn"><b>'+sel.length+'</b> selected</span>';
+    if(drafts.length===sel.length) h+='<button class="btn sm primary" type="button" data-bk="queue">Add to queue</button><button class="btn sm" type="button" data-bk="spread">Spread out…</button><button class="btn sm" type="button" data-bk="same">Same time…</button>';
+    if(sched.length===sel.length) h+='<button class="btn sm" type="button" data-bk="unschedule">Unschedule</button>';
+    h+='<button class="btn sm danger" type="button" data-bk="delete">Delete</button><button class="btn sm ghost" type="button" data-bk="clear">Clear</button>';
+    if(drafts.length&&sched.length) h+='<span class="hint">Pick only drafts to schedule, or only scheduled posts to pull back.</span>';
+    else if(blocked) h+='<span class="hint">'+blocked+' still need'+(blocked===1?"s":"")+' something and will be skipped.</span>';
+    bar.innerHTML='<div class="bulkrow">'+h+'</div><div id="bulkMore"></div>';
+    $$("[data-bk]",bar).forEach(function(b){ b.onclick=function(){ act(b.dataset.bk, sel) } });
+  }
+  function finish(r, verb){ bulkResult(r, verb); route() }
+  function act(kind, sel){
+    var more=$("#bulkMore"), ids=sel.map(function(p){return p.id}), n=sel.length, s=n===1?"":"s";
+    if(kind==="clear"){ $$("[data-sel]").forEach(function(x){ x.checked=false }); draw(); return }
+    var confirmIn=function(text, label, fn, danger){ more.innerHTML='<div class="confirm"><span>'+text+'</span><button class="btn sm '+(danger?"danger":"primary")+'" type="button" id="bkY">'+label+'</button><button class="btn sm ghost" type="button" id="bkN">Not yet</button></div>';
+      $("#bkN").onclick=function(){ more.innerHTML="" }; $("#bkY").onclick=function(){ this.disabled=true; this.textContent="Working…"; fn() } };
+    if(kind==="queue") confirmIn("Put "+n+" post"+s+" into "+esc(brand.name)+"’s next free posting times, in the order shown?", "Queue "+n, function(){ runBulk("queue", ids).then(function(r){ finish(r,"queued") }).catch(function(e){ toast(e.message,true) }) });
+    if(kind==="unschedule") confirmIn("Pull "+n+" post"+s+" back to drafts? They won’t go out.", "Unschedule "+n, function(){ runBulk("unschedule", ids).then(function(r){ finish(r,"pulled back") }).catch(function(e){ toast(e.message,true) }) });
+    if(kind==="delete") confirmIn("Delete "+n+" post"+s+" from Studio? Scheduled ones won’t go out. Posts already up stay on the platforms.", "Delete "+n, function(){ runBulk("delete", ids).then(function(r){ finish(r,"deleted") }).catch(function(e){ toast(e.message,true) }) }, true);
+    if(kind==="same"){
+      more.innerHTML='<div class="sheet"><div class="actions"><label for="bkAt">Post all '+n+' at</label><input type="datetime-local" id="bkAt" style="width:auto"><button class="btn sm primary" type="button" id="bkGo">Schedule '+n+'</button><button class="btn sm ghost" type="button" id="bkN">Cancel</button></div></div>';
+      $("#bkN").onclick=function(){ more.innerHTML="" };
+      $("#bkGo").onclick=function(){ var v=$("#bkAt").value; if(!v){ toast("Pick a date and time.",true); return } var at=new Date(v).getTime(); this.disabled=true;
+        runBulk("times", ids.map(function(id){ return {id:id, at:at} })).then(function(r){ finish(r,"scheduled") }).catch(function(e){ toast(e.message,true) }) };
+    }
+    if(kind==="spread"){
+      var start=new Date(); start.setDate(start.getDate()+1); start.setHours(9,0,0,0);
+      more.innerHTML='<div class="sheet"><div class="fieldrow"><div class="field"><label for="bkStart">First one</label><input type="datetime-local" id="bkStart" value="'+localInput(start.getTime())+'"></div>'+
+        '<div class="field"><label for="bkEvery">Then one every</label><div class="actions" style="flex-wrap:nowrap"><input type="number" id="bkEvery" min="1" max="60" value="1" style="width:80px"><select id="bkUnit" style="width:auto"><option value="day">day(s)</option><option value="hour">hour(s)</option><option value="week">week(s)</option></select></div></div></div>'+
+        '<label class="check"><input type="checkbox" id="bkWk"> Skip weekends</label><ol class="bkplan" id="bkPlan"></ol>'+
+        '<div class="actions"><button class="btn sm primary" type="button" id="bkGo">Schedule '+n+'</button><button class="btn sm ghost" type="button" id="bkN">Cancel</button></div></div>';
+      var plan=[];
+      var ready=sel.filter(function(p){ return !(p.problems&&p.problems.length) }), blockedL=sel.filter(function(p){ return p.problems&&p.problems.length });
+      function compute(){
+        var v=$("#bkStart").value, every=Math.max(1,Number($("#bkEvery").value)||1), unit=$("#bkUnit").value, wk=$("#bkWk").checked;
+        plan=[]; if(!v){ $("#bkPlan").innerHTML=""; return }
+        var d=new Date(v);
+        ready.forEach(function(p,i){
+          if(i){ if(unit==="hour") d=new Date(d.getTime()+every*3600e3); else { d=new Date(d); d.setDate(d.getDate()+every*(unit==="week"?7:1)) } }
+          if(wk) while(d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
+          plan.push({id:p.id, at:d.getTime()});
+        });
+        $("#bkPlan").innerHTML=ready.map(function(p,i){ var first=(p.content||"").split("\n")[0]||"Picture post"; return '<li><b>'+fmtDate(plan[i].at,true)+'</b> <span>'+esc(first.slice(0,70))+'</span></li>' }).join("")+
+          blockedL.map(function(p){ var first=(p.content||"").split("\n")[0]||"Picture post"; return '<li class="skip"><b>Skipped</b> <span>'+esc(first.slice(0,60))+'</span> <em>needs: '+esc(p.problems[0])+'</em></li>' }).join("");
+        var go=$("#bkGo"); if(go){ go.textContent="Schedule "+plan.length; go.disabled=!plan.length }
+      }
+      ["bkStart","bkEvery","bkUnit","bkWk"].forEach(function(k){ $("#"+k).oninput=compute; $("#"+k).onchange=compute });
+      compute();
+      $("#bkN").onclick=function(){ more.innerHTML="" };
+      $("#bkGo").onclick=function(){ if(!plan.length){ toast("Pick when the first one goes out.",true); return } if(plan[0].at<Date.now()+120000){ toast("The first time has already passed.",true); return } this.disabled=true; this.textContent="Scheduling…";
+        runBulk("times", plan).then(function(r){ finish(r,"scheduled") }).catch(function(e){ toast(e.message,true) }) };
+    }
+  }
+  $$("[data-sel]").forEach(function(x){ x.onchange=draw });
+  $$("[data-selall]").forEach(function(a){ a.onchange=function(){ var on=a.checked; $$('[data-sel][data-grp="'+a.dataset.selall+'"]').forEach(function(b){ b.checked=on }); draw() } });
+  draw();
+}
+
+/* Spreadsheet import: one row per post. */
+var IMPORT_TEMPLATE="date,time,caption,platforms,media\n2026-10-14,09:30,\"First post. Links get tracked automatically: https://example.com\",\"instagram, bluesky\",https://example.com/photo.jpg\n2026-10-16,19:00,\"A text-only post for LinkedIn and Bluesky\",\"linkedin, bluesky\",\n";
+var PLAT_WORDS={instagram:"instagram",ig:"instagram",insta:"instagram",tiktok:"tiktok",tt:"tiktok",linkedin:"linkedin",li:"linkedin",threads:"threads",bluesky:"bluesky",bsky:"bluesky",x:"twitter",twitter:"twitter",pinterest:"pinterest",pin:"pinterest",facebook:"facebook",fb:"facebook"};
+function csvRows(text){
+  var first=(text.split(/\r?\n/)[0]||""), counts={",":0,";":0,"\t":0};
+  for(var k=0;k<first.length;k++) if(counts[first[k]]!==undefined) counts[first[k]]++;
+  var delim=Object.keys(counts).sort(function(a,b){return counts[b]-counts[a]})[0];
+  var rows=[], row=[], f="", q=false;
+  for(var i=0;i<text.length;i++){ var ch=text[i];
+    if(q){ if(ch==='"'){ if(text[i+1]==='"'){ f+='"'; i++ } else q=false } else f+=ch }
+    else if(ch==='"') q=true;
+    else if(ch===delim){ row.push(f); f="" }
+    else if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&text[i+1]==='\n') i++; row.push(f); rows.push(row); row=[]; f="" }
+    else f+=ch;
+  }
+  if(f||row.length){ row.push(f); rows.push(row) }
+  return rows.filter(function(r){ return r.some(function(x){ return x.trim() }) });
+}
+function parseWhen(dateS, timeS){
+  dateS=(dateS||"").trim(); timeS=(timeS||"").trim();
+  if(!timeS){ var m0=dateS.match(/^(\S+)[ T](\d{1,2}[:.]\d{2}(?:\s*[ap]\.?m\.?)?)$/i); if(m0){ dateS=m0[1]; timeS=m0[2] } }
+  if(!dateS) return {at:null};
+  var y,mo,d, m;
+  if((m=dateS.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))){ y=+m[1]; mo=+m[2]; d=+m[3] }
+  else if((m=dateS.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/))){ d=+m[1]; mo=+m[2]; y=+m[3]; if(y<100) y+=2000 }  // day first, as in Spain and Ireland
+  else return {error:"Can’t read the date “"+dateS+"”. Use 2026-10-14 or 14/10/2026."};
+  var h=9, mi=0;
+  if(timeS){ var t=timeS.match(/^(\d{1,2})[:.](\d{2})\s*([ap])?\.?m?\.?$/i); if(!t) return {error:"Can’t read the time “"+timeS+"”. Use 09:30 or 7:00 pm."}; h=+t[1]; mi=+t[2]; if(t[3]){ var pm=t[3].toLowerCase()==="p"; if(pm&&h<12) h+=12; if(!pm&&h===12) h=0 } }
+  var dt=new Date(y,mo-1,d,h,mi);
+  if(isNaN(dt)||dt.getMonth()!==mo-1) return {error:"“"+dateS+"” isn’t a real date."};
+  return {at:dt.getTime(), noTime:!timeS};
+}
+function parsePostSheet(text, accounts){
+  var rows=csvRows(text); if(!rows.length) return {rows:[], error:"That’s empty."};
+  var hdr=rows[0].map(function(x){ return x.trim().toLowerCase() });
+  var col=function(re){ return hdr.findIndex(function(h){ return re.test(h) }) };
+  var ci=col(/^(caption|text|post|copy|content|message)/), di=col(/^(date|day)$/), ti=col(/^(time|hour)$/), wi=col(/^(when|datetime|date ?time|scheduled|publish)/), pi=col(/^(platforms?|channels?|networks?|accounts?)$/), mi=col(/^(media|image|images|video|photo|file|media ?urls?|image ?url)/);
+  if(ci<0) return {rows:[], error:"Add a header row with at least a “caption” column. Download the template to see the layout."};
+  var connected=accounts.map(function(a){return a.platform});
+  var out=rows.slice(1).map(function(r,i){
+    var o={row:i+2, caption:(r[ci]||"").trim(), issues:[]};
+    var w=wi>-1 ? parseWhen(r[wi]) : parseWhen(di>-1?r[di]:"", ti>-1?r[ti]:"");
+    if(w.error) o.issues.push(w.error); o.at=w.at||null; if(w.noTime&&o.at) o.issues.push("No time given, so 09:00.");
+    var pl=pi>-1 ? (r[pi]||"").split(/[,;|\/]+/).map(function(x){ return PLAT_WORDS[x.trim().toLowerCase()] || (x.trim()?"?"+x.trim():"") }).filter(Boolean) : [];
+    var unknown=pl.filter(function(x){ return x[0]==="?" }); if(unknown.length) o.issues.push("Unknown platform: "+unknown.map(function(x){return x.slice(1)}).join(", "));
+    pl=pl.filter(function(x){ return x[0]!=="?" });
+    var notConn=pl.filter(function(x){ return connected.indexOf(x)<0 }); if(notConn.length){ o.issues.push("Not connected: "+notConn.map(platName).join(", ")+" (left out)"); pl=pl.filter(function(x){ return connected.indexOf(x)>-1 }) }
+    o.platforms=pl;
+    o.media=mi>-1 ? (r[mi]||"").split(/[\s|,]+/).map(function(x){return x.trim()}).filter(function(x){ return /^https:\/\//.test(x) }) : [];
+    if(!o.caption&&!o.media.length) o.issues.push("Nothing to post.");
+    if(o.at && o.at<Date.now()+120000) o.issues.push("That time has passed; it’ll be a draft.");
+    return o;
+  }).filter(function(o){ return o.caption||o.media.length||o.issues.length>1 });
+  return {rows:out};
+}
+function importSheet(host, brand, accounts){
+  var parsed={rows:[]};
+  host.innerHTML='<div class="sheet"><h3>Import posts for '+esc(brand.name)+'</h3>'+
+    '<p class="hint" style="margin:0">One row per post: <span class="mono">date, time, caption, platforms, media</span>. Platforms can be left blank for every connected account. Media is a public link to a picture or video (Google Drive and Dropbox share links work). <a href="#" id="imTpl">Download the template</a></p>'+
+    '<div class="actions"><label class="btn sm" style="cursor:pointer"><input type="file" id="imFile" accept=".csv,.tsv,.txt,text/csv" hidden> Choose a CSV file</label><span class="hint">or paste from a spreadsheet below</span></div>'+
+    '<textarea id="imText" class="code" style="min-height:110px" placeholder="date,time,caption,platforms,media"></textarea>'+
+    '<div id="imPrev"></div>'+
+    '<label class="check"><input type="checkbox" id="imSched" checked> Schedule rows that have a date. Rows without one, or that still need something, are saved as drafts.</label>'+
+    '<div class="actions"><button class="btn primary" type="button" id="imGo" disabled>Import</button><button class="btn ghost" type="button" id="imCancel">Cancel</button></div><div id="imOut"></div></div>';
+  $("#imCancel").onclick=function(){ host.innerHTML="" };
+  $("#imTpl").onclick=function(e){ e.preventDefault(); var a=document.createElement("a"); a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(IMPORT_TEMPLATE); a.download="studio-posts-template.csv"; document.body.appendChild(a); a.click(); a.remove() };
+  function preview(){
+    parsed=parsePostSheet($("#imText").value, accounts);
+    var p=$("#imPrev");
+    if(parsed.error){ p.innerHTML=$("#imText").value.trim()?'<p class="hint" style="color:var(--danger)">'+esc(parsed.error)+'</p>':''; $("#imGo").disabled=true; return }
+    var rows=parsed.rows;
+    p.innerHTML=rows.length?'<div class="tablewrap imtable"><table><thead><tr><th>Row</th><th>When</th><th>Where</th><th>Caption</th><th class="r">Media</th></tr></thead><tbody>'+rows.map(function(r){
+      return '<tr><td class="mono">'+r.row+'</td><td class="mono">'+(r.at?esc(fmtDate(r.at,true)):"Draft")+'</td><td>'+esc(r.platforms.length?r.platforms.map(platName).join(", "):"All connected")+'</td><td>'+esc(r.caption.slice(0,90))+(r.caption.length>90?"…":"")+(r.issues.length?'<span class="sub warnx">'+esc(r.issues.join(" "))+'</span>':'')+'</td><td class="r mono">'+r.media.length+'</td></tr>' }).join("")+'</tbody></table></div>'
+      : '';
+    $("#imGo").disabled=!rows.length; $("#imGo").textContent=rows.length?"Import "+rows.length+" post"+(rows.length===1?"":"s"):"Import";
+  }
+  $("#imText").oninput=preview;
+  $("#imFile").onchange=function(){ var f=this.files[0]; if(!f) return; var rd=new FileReader(); rd.onload=function(){ $("#imText").value=String(rd.result||""); preview() }; rd.readAsText(f) };
+  $("#imGo").onclick=function(){
+    var btn=this, rows=parsed.rows, sched=$("#imSched").checked, results=[], i=0; btn.disabled=true;
+    function step(){
+      if(i>=rows.length) return Promise.resolve();
+      var chunk=rows.slice(i,i+5); i+=chunk.length; btn.textContent="Importing "+Math.min(i,rows.length)+" of "+rows.length+"…";
+      return api("POST","social/import",{profile_id:brand._id, schedule:sched, rows:chunk.map(function(r){ return {row:r.row, caption:r.caption, platforms:r.platforms, media:r.media, at:r.at} })})
+        .then(function(res){ results=results.concat(res.results); return step() });
+    }
+    step().then(function(){
+      var sc=results.filter(function(r){return r.status==="scheduled"}), dr=results.filter(function(r){return r.status==="draft"}), sk=results.filter(function(r){return r.status==="skipped"});
+      $("#imOut").innerHTML='<div class="notice"><p><b>'+sc.length+' scheduled</b>, '+dr.length+' saved as draft'+(dr.length===1?"":"s")+(sk.length?', '+sk.length+' skipped':'')+'.</p><button class="btn sm" type="button" id="imDone">Done</button></div>'+
+        ((dr.length||sk.length)?'<ul class="probs" style="margin-top:10px">'+dr.concat(sk).filter(function(r){ return r.error||(r.problems&&r.problems.length) }).map(function(r){ return '<li>Row '+r.row+': '+esc(r.error||r.problems[0])+'</li>' }).join("")+'</ul>':'');
+      $("#imDone").onclick=function(){ route() };
+      btn.textContent="Imported";
+    }).catch(function(e){ btn.disabled=false; btn.textContent="Try again"; toast(e.message,true) });
+  };
+}
+
 function socialView(brandParam){
   return loadSocialMeta().then(function(meta){
     var v=$("#view");
@@ -1429,7 +1608,7 @@ function socialView(brandParam){
       return Promise.all([api("GET","social/brands/"+brand._id+"/accounts"), api("GET","social/posts?brand="+encodeURIComponent(brand._id))]).then(function(r){
         var accounts=r[0].accounts, posts=r[1].posts;
         var byPlat={}; accounts.forEach(function(a){ byPlat[a.platform]=a });
-        var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>');
+        var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn" type="button" id="importBtn"'+(accounts.length?'':' disabled')+'>Import posts</button><button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>')+'<div id="importHost"></div>';
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
         html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="briefBtn">Brief for Claude</button><button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
         html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. First 2 free, then $6/month each on Zernio.</span></h2><div class="plats">'+
@@ -1441,12 +1620,18 @@ function socialView(brandParam){
         if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
         groups.forEach(function(g){
           var list=posts.filter(g[1]); if(!list.length) return;
-          html+='<section class="panel"><h2 class="sec">'+g[0]+' <span class="hint">'+list.length+'</span></h2><div class="rows">'+list.map(function(p){
-            var when = p.status==="draft" ? "Edited "+fmtDate(p.updated_at,true) : p.status==="published"||p.status==="partial" ? fmtDate(p.published_at||p.scheduled_at,true) : fmtDate(p.scheduled_at,true);
+          var grp=g[0]==="Drafts"?"d":g[0]==="Coming up"?"s":"";
+          html+='<section class="panel"><h2 class="sec"><span class="sechd">'+(grp?'<label class="pk"><input type="checkbox" data-selall="'+grp+'" aria-label="Select all '+g[0].toLowerCase()+'"></label>':'')+g[0]+'</span> <span class="hint">'+list.length+'</span></h2><div class="rows">'+list.map(function(p){
+            var when = p.status==="draft" ? (p.planned_at?"Planned "+fmtDate(p.planned_at,true):"Edited "+fmtDate(p.updated_at,true)) : p.status==="published"||p.status==="partial" ? fmtDate(p.published_at||p.scheduled_at,true) : fmtDate(p.scheduled_at,true);
             var first=(p.content||"").split("\n")[0]||(p.media.length?"Picture post":"Empty post");
-            return '<a class="rowi nosq" href="#/social/p/'+esc(p.id)+'"><span class="t">'+esc(first)+'<small>'+esc(when)+' · '+esc(p.targets.map(function(t){return platName(t.platform)}).join(", ")||"No accounts picked")+(p.media.length?' · '+p.media.length+' media':'')+'</small></span><span class="meta">'+socialChip(p.status)+'</span></a>' }).join("")+'</div></section>';
+            var sub=esc(when)+' · '+esc(p.targets.map(function(t){return platName(t.platform)}).join(", ")||"No accounts picked")+(p.media.length?' · '+p.media.length+' media':'')+(p.status==="draft"&&p.problems&&p.problems.length?' · <span class="warnx">needs: '+esc(p.problems[0])+'</span>':'');
+            var canPick=grp&&(p.status==="draft"||p.status==="scheduled");
+            return '<div class="rowi nosq'+(canPick?' pickrow':'')+'">'+(canPick?'<label class="pk"><input type="checkbox" data-sel="'+esc(p.id)+'" data-grp="'+grp+'" aria-label="Select '+esc(first.slice(0,40))+'"></label>':'')+'<a class="t" href="#/social/p/'+esc(p.id)+'">'+esc(first)+'<small>'+sub+'</small></a><span class="meta">'+socialChip(p.status)+'</span></div>' }).join("")+'</div></section>';
         });
+        html+='<div id="bulkBar" class="bulkbar" hidden></div>';
         v.innerHTML=html;
+        bulkSetup(posts, brand);
+        $("#importBtn").onclick=function(){ importSheet($("#importHost"), brand, accounts); $("#imText").focus() };
         slotsPanel($("#slotsHost"), brand);
         perfPanel($("#perfHost"), brand);
         api("GET","links/stats?brand="+encodeURIComponent(brand._id)+"&days=30").then(function(d){ if(!d.platforms.length) return; var h=$("#resHost"); if(!h) return;

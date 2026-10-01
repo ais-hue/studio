@@ -517,3 +517,23 @@ p.camppick{color:var(--t3)}
 .rowi.tl .t a:hover{text-decoration:underline}
 .calcamp{display:block;font-size:10.5px;line-height:1.5;padding:0 6px;margin:0 -6px 3px;background:var(--soft);border-top:2px solid var(--warn);color:var(--t2);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .legend .k-camp{--k:var(--warn)}
+
+/* bulk scheduling */
+.sechd{display:flex;align-items:center;gap:10px}
+.pk{display:flex;align-items:center;cursor:pointer;padding:4px;margin:-4px}
+.pk input{width:16px;height:16px;margin:0;accent-color:var(--coral);cursor:pointer}
+.rowi.pickrow{grid-template-columns:auto minmax(0,1fr) auto}
+.rowi .t{color:var(--t1);text-decoration:none}
+a.t:hover{text-decoration:underline}
+.warnx{color:var(--warn)}
+.sub.warnx{display:block;font-size:12px;margin-top:2px}
+.bulkbar{position:sticky;bottom:0;z-index:5;background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--coral);padding:12px 18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -6px 18px rgba(14,22,40,.08)}
+.bulkrow{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.bulkrow .bn{font-size:13.5px;margin-right:6px}
+.bulkbar .sheet{padding:14px}
+.bkplan{margin:0;padding-left:22px;font-size:13px;display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.bkplan b{font-variant-numeric:tabular-nums;font-weight:600;margin-right:6px}
+.bkplan em{font-style:normal;color:var(--warn);font-size:12px}
+.imtable{max-height:320px;overflow:auto}
+.imtable td{vertical-align:top}
+.bkplan li.skip{color:var(--t3)}

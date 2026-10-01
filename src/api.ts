@@ -10,8 +10,9 @@ import { FIELD_TYPES, loadForm } from "./forms";
 import { cleanRules, compileRules, segmentWhere } from "./segments";
 import { performance, syncMetrics } from "./performance";
 import { getBrief, reviewQueue, saveBrief, tidyBatches } from "./producer";
+import { importUrl } from "./mcp";
 import { Kind, createInitiative, deleteInitiative, initiativeDetail, listInitiatives, setInitiative, updateInitiative } from "./initiatives";
-import { FREE_BYTES, FileRow, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
+import { FREE_BYTES, FileRow, fileUrl, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
@@ -876,6 +877,88 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (s1 === "accounts" && s2 && s3 === "boards" && m === "GET") return json({ boards: await pinterestBoards(env, s2) });
     if (s1 === "accounts" && s2 && s3 === "tiktok" && m === "GET") return json({ info: await tiktokInfo(env, s2, str(url.searchParams.get("media"), 10)) });
     if (s1 === "media" && m === "POST") return json({ media: await uploadMedia(env, req) }, 201);
+
+    /* Bulk: schedule several posts at once (into the queue or at given times), pull back, or delete. */
+    if (s1 === "bulk" && m === "POST") {
+      const d = await body(req);
+      const action = str(d.action, 20);
+      const tz = (await getSettings(env)).timezone;
+      const items: Array<{ id: string; at?: number }> = action === "times"
+        ? (Array.isArray(d.items) ? d.items : []).slice(0, 25).map((x: any) => ({ id: str(x?.id, 40), at: Number(x?.at) }))
+        : (Array.isArray(d.ids) ? d.ids : []).slice(0, 25).map((x: any) => ({ id: str(x, 40) }));
+      if (!items.length) throw new HttpError(400, "Pick some posts first.");
+      const done: Array<{ id: string; at?: number }> = [], failed: Array<{ id: string; error: string }> = [];
+      for (const it of items) {
+        try {
+          const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(it.id).first<SocialPost>();
+          if (!p) throw new HttpError(404, "That post doesn’t exist any more.");
+          if (action === "queue" || action === "times") {
+            if (p.status !== "draft") throw new HttpError(409, "Already scheduled or posted.");
+            let at = it.at || null;
+            if (action === "queue") { at = await nextSlot(env, p.profile_id, tz); if (!at) throw new HttpError(400, "This brand has no free posting times. Add some on the Social page."); }
+            if (!at || at < t + 2 * 60_000) throw new HttpError(400, "That time has already passed.");
+            await publish(env, p, at);
+            done.push({ id: p.id, at });
+          } else if (action === "unschedule") {
+            await unschedule(env, p);
+            done.push({ id: p.id });
+          } else if (action === "delete") {
+            if (p.status === "publishing") throw new HttpError(409, "Going out right now.");
+            if (p.status === "scheduled") await unschedule(env, p);
+            await env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id).run();
+            done.push({ id: p.id });
+          } else throw new HttpError(400, "Unknown action.");
+        } catch (e) {
+          failed.push({ id: it.id, error: e instanceof HttpError ? e.message : (e as Error).message || "Something went wrong." });
+        }
+      }
+      return json({ done, failed });
+    }
+
+    /* Import posts from a spreadsheet (parsed in the browser, sent a few rows at a time). */
+    if (s1 === "import" && m === "POST") {
+      const d = await body(req);
+      const brandId = str(d.profile_id, 80);
+      const brand = (await listProfiles(env)).find((x) => x._id === brandId);
+      if (!brand) throw new HttpError(404, "Pick a brand first.");
+      const accounts = await listAccounts(env, brandId);
+      const brief = await getBrief(env, brandId);
+      const rows = (Array.isArray(d.rows) ? d.rows : []).slice(0, 10);
+      const out: Array<{ row: number; id?: string; status: string; at?: number | null; problems?: string[]; error?: string }> = [];
+      for (const r of rows) {
+        const rowNo = Number(r?.row) || 0;
+        try {
+          const want: string[] = (Array.isArray(r.platforms) && r.platforms.length ? r.platforms : accounts.map((a) => a.platform)).map((x: any) => str(x, 20));
+          const missing = want.filter((pl) => !accounts.some((a) => a.platform === pl));
+          if (missing.length) throw new HttpError(400, `Not connected: ${missing.map((x) => PLATFORMS[x]?.name || x).join(", ")}.`);
+          const media: Array<{ url: string; type: string; name: string }> = [];
+          for (const u of (Array.isArray(r.media) ? r.media : []).slice(0, 10)) {
+            const f = await importUrl(env, str(u, 1000), brand.name, "");
+            if (f.kind !== "image" && f.kind !== "video") throw new HttpError(400, `${f.name} isn’t a picture or video.`);
+            media.push({ url: fileUrl(env, f.key), type: f.kind === "video" ? "video" : f.type === "image/gif" ? "gif" : "image", name: f.name });
+          }
+          const options: any = { captions: {}, track: true };
+          if (want.includes("pinterest") && brief.pinterest_board) options.pinterest = { boardId: brief.pinterest_board };
+          const pid = id("sp_");
+          await env.DB.prepare("INSERT INTO social_posts (id, profile_id, content, media, targets, options, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(pid, brandId, String(r.caption || "").slice(0, 70000), JSON.stringify(media), JSON.stringify(want.map((pl) => ({ platform: pl, accountId: accounts.find((a) => a.platform === pl)!._id }))), JSON.stringify(options), t, t).run();
+          if (d.initiative_id) await setInitiative(env, "post", pid, str(d.initiative_id, 40));
+          const p = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>())!;
+          const at = Number(r.at) || null;
+          const issues = problems(p);
+          if (at && d.schedule && !issues.length && at > t + 2 * 60_000) {
+            try { await publish(env, p, at); out.push({ row: rowNo, id: pid, status: "scheduled", at }); }
+            catch (e) { out.push({ row: rowNo, id: pid, status: "draft", error: (e as Error).message }); }
+          } else {
+            if (at) await env.DB.prepare("UPDATE social_posts SET planned_at = ? WHERE id = ?").bind(at, pid).run();
+            out.push({ row: rowNo, id: pid, status: "draft", at, problems: issues, error: at && at <= t + 2 * 60_000 ? "That time has passed, so it’s a draft." : undefined });
+          }
+        } catch (e) {
+          out.push({ row: rowNo, status: "skipped", error: e instanceof HttpError ? e.message : (e as Error).message });
+        }
+      }
+      return json({ results: out });
+    }
 
     if (s1 === "posts") {
       const view = (p: SocialPost) => ({ ...p, media: parseJson(p.media, []), targets: parseJson(p.targets, []), options: parseJson(p.options, {}), results: parseJson(p.results, []), metrics: parseJson((p as any).metrics || "{}", {}), problems: problems(p) });

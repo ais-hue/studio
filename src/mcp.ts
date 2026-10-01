@@ -52,7 +52,7 @@ async function mediaFromArgs(env: Env, a: any, folder: string): Promise<Array<{ 
   return out;
 }
 
-async function importUrl(env: Env, u: string, folder: string, alt: string, name?: string): Promise<FileRow> {
+export async function importUrl(env: Env, u: string, folder: string, alt: string, name?: string): Promise<FileRow> {
   let url: URL;
   try { url = new URL(u); } catch { throw new HttpError(400, `That isn’t a link: ${u.slice(0, 100)}`); }
   if (url.protocol !== "https:") throw new HttpError(400, "Only https links can be imported.");
