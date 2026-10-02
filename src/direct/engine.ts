@@ -411,7 +411,12 @@ export async function combine(env: Env, postId: string): Promise<void> {
     const zr = parse<Array<{ platform: string; status: string; url: string | null; error: string | null }>>(p.zernio_results, []);
     const mine = new Set(dl.map((d) => d.platform));
     const theirs = zr.filter((r) => !mine.has(r.platform));
-    if (theirs.length) rows.push(...theirs.map((r) => ({ ...r, status: r.error ? "failed" : r.status || p.zernio_status! })));
+    // Zernio marks each platform "pending" until it goes out; that means scheduled or publishing, going by the post as a whole.
+    const waiting = p.zernio_status === "scheduled" ? "scheduled" : "publishing";
+    const zs = (r: { status: string; error: string | null }) => r.error ? "failed"
+      : !r.status || ["pending", "scheduled", "queued", "processing", "publishing"].includes(r.status) ? (r.status === "processing" || r.status === "publishing" ? "publishing" : waiting)
+      : r.status;
+    if (theirs.length) rows.push(...theirs.map((r) => ({ ...r, status: zs(r) })));
     else rows.push({ platform: "zernio", status: p.zernio_status, url: null, error: null });
   }
   for (const d of dl) {
