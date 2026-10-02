@@ -8,6 +8,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   RESEND_WEBHOOK_SECRET?: string;
   ZERNIO_API_KEY?: string;
+  SOCIAL_KEY?: string;
   FILES?: R2Bucket;
   OAUTH_KV?: KVNamespace;
   ADMIN_EMAILS: string;

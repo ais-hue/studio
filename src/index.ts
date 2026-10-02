@@ -8,6 +8,7 @@ import { handleAuth } from "./login";
 import { serveFile } from "./files";
 import { authorize, studioProvider } from "./oauth";
 import { handleUploadLink } from "./uploads";
+import { finishConnect } from "./direct/engine";
 
 let schemaReady: Promise<unknown> | null = null;
 async function applySchema(env: Env) {
@@ -40,6 +41,11 @@ async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
   if (!user) {
     if (url.pathname.startsWith("/api/")) return json({ error: "You’ve been signed out. Sign in again to continue." }, 401);
     return Response.redirect(new URL("/login", req.url).toString(), 302);
+  }
+  if (url.pathname.startsWith("/social/callback/")) {
+    // Back from a platform's own log-in screen (Studio's developer app).
+    const platform = url.pathname.split("/")[3] || "";
+    return Response.redirect(new URL(await finishConnect(env, platform, url, url.origin), req.url).toString(), 302);
   }
   if (url.pathname === "/social/connected") {
     // Zernio sends people back here after they log in to a platform; hand the result to the app.

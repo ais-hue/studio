@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610010814";
+var VERSION = "202610011811";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1611,10 +1611,10 @@ function socialView(brandParam){
         var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn" type="button" id="importBtn"'+(accounts.length?'':' disabled')+'>Import posts</button><button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>')+'<div id="importHost"></div>';
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
         html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="briefBtn">Brief for Claude</button><button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
-        html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. First 2 free, then $6/month each on Zernio.</span></h2><div class="plats">'+
+        html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. Set up Studio’s own platform apps in <a href="#/settings">Settings</a>.</span></h2><div class="plats">'+
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
-              (a ? '<span class="pu">@'+esc(a.username)+(a.active?'':' · needs reconnecting')+'</span><button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
+              (a ? '<span class="pu">@'+esc(a.username)+(a.via==="zernio"?' · via Zernio':'')+(a.active?'':' · <span class="warnx" title="'+esc(a.note||"")+'">needs reconnecting</span>')+'</span>'+(a.active?'':'<button class="btn sm" type="button" data-conn="'+p+'">Reconnect</button>')+'<button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
                  : '<button class="btn sm" type="button" data-conn="'+p+'">Connect</button>')+'</div>' }).join("")+'</div><div id="discHost"></div></section><div id="resHost"></div><div id="perfHost"></div><div id="slotsHost"></div>';
         var groups=[["Needs attention",function(p){return p.status==="failed"||p.status==="partial"}],["Coming up",function(p){return p.status==="scheduled"||p.status==="publishing"}],["Drafts",function(p){return p.status==="draft"}],["Posted",function(p){return p.status==="published"}]];
         if(!posts.length) html+='<div class="empty"><b>No posts yet</b>'+(accounts.length?'Write one and send it everywhere at once.':'Connect an account above, then write your first post.')+'</div>';
@@ -1650,8 +1650,25 @@ function socialView(brandParam){
           $("#bName").focus(); $("#bCancel").onclick=function(){ $("#brandHost").innerHTML="" };
           $("#brandForm").onsubmit=function(e){ e.preventDefault(); api("POST","social/brands",{name:$("#bName").value}).then(function(r){ go("#/social/b/"+r.brand._id) }).catch(function(e){ toast(e.message,true) }) };
         };
-        $$("[data-conn]").forEach(function(b){ b.onclick=function(){ b.disabled=true; b.textContent="Opening…";
-          api("POST","social/brands/"+brand._id+"/connect",{platform:b.dataset.conn}).then(function(r){ location.href=r.url }).catch(function(e){ b.disabled=false; b.textContent="Connect"; toast(e.message,true) }) } });
+        $$("[data-conn]").forEach(function(b){ var label=b.textContent; b.onclick=function(){ b.disabled=true; b.textContent="Opening…";
+          api("POST","social/brands/"+brand._id+"/connect",{platform:b.dataset.conn}).then(function(r){
+            if(r.url){ location.href=r.url; return }
+            b.disabled=false; b.textContent=label;
+            if(r.password) passwordForm(b.dataset.conn);
+          }).catch(function(e){ b.disabled=false; b.textContent=label; toast(e.message,true) }) } });
+        function passwordForm(pl){
+          var h=$("#discHost");
+          h.innerHTML='<form class="sheet" id="pwForm" style="margin:0 18px 16px" autocomplete="off"><h3>Connect '+esc(platName(pl))+'</h3>'+
+            '<p class="hint" style="margin:0">In '+esc(platName(pl))+', open <b>Settings → Privacy and security → App passwords</b>, add one called “Studio”, and paste it here. Studio never sees your main password.</p>'+
+            '<div class="fieldrow"><div class="field"><label for="pwHandle">Handle</label><input type="text" id="pwHandle" required maxlength="200" placeholder="ciunas.bsky.social" spellcheck="false"></div>'+
+            '<div class="field"><label for="pwPass">App password</label><input type="password" id="pwPass" required maxlength="40" placeholder="abcd-efgh-ijkl-mnop" spellcheck="false"></div></div>'+
+            '<div class="actions"><button class="btn primary sm" type="submit">Connect</button><button class="btn ghost sm" type="button" id="pwCancel">Cancel</button></div></form>';
+          $("#pwHandle").focus(); $("#pwCancel").onclick=function(){ h.innerHTML="" };
+          $("#pwForm").onsubmit=function(e){ e.preventDefault(); var sb=this.querySelector("[type=submit]"); sb.disabled=true; sb.textContent="Checking…";
+            api("POST","social/brands/"+brand._id+"/connect",{platform:pl, handle:$("#pwHandle").value.trim(), password:$("#pwPass").value.trim()})
+              .then(function(r){ toast(platName(pl)+" connected as "+r.account.username); route() })
+              .catch(function(err){ sb.disabled=false; sb.textContent="Connect"; toast(err.message,true) }) };
+        }
         $$("[data-disc]").forEach(function(b){ b.onclick=function(){
           $("#discHost").innerHTML='<div class="confirm" style="margin:0 18px 16px"><span>Disconnect '+esc(platName(b.dataset.plat))+'? Scheduled posts for it will fail. You can connect it again any time.</span><button class="btn sm danger" type="button" id="dcYes">Disconnect</button><button class="btn sm ghost" type="button" id="dcNo">Keep it</button></div>';
           $("#dcNo").onclick=function(){ $("#discHost").innerHTML="" };
@@ -2088,8 +2105,8 @@ function briefView(bid){
 
 /* ============ settings ============ */
 function settingsView(){
-  return Promise.all([api("GET","settings"), api("GET","settings/events"), api("GET","social/status")]).then(function(r){
-    var s=r[0].settings, ev=r[1], zr=r[2], v=$("#view"), dbl=s.double_optin==="1";
+  return Promise.all([api("GET","settings"), api("GET","settings/events"), api("GET","social/status"), api("GET","social/apps")]).then(function(r){
+    var s=r[0].settings, ev=r[1], zr=r[2], apps=r[3].apps, v=$("#view"), dbl=s.double_optin==="1";
     var evName={"email.bounced":"Bounced","email.complained":"Marked as spam","email.failed":"Couldn’t send","email.suppressed":"On do-not-send list"};
     var hooks = ev.connected
       ? '<div class="pad stack" style="gap:10px"><p style="margin:0"><span class="chip sent">Connected</span> Studio stops emailing addresses that bounce or mark you as spam, and takes them out of automations.</p>'+
@@ -2109,10 +2126,18 @@ function settingsView(){
       '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
       '<div class="actions"><button type="button" class="switch" role="switch" id="sDbl" aria-checked="'+dbl+'" aria-labelledby="sDblLbl"></button><span id="sDblLbl">Ask new sign-ups to confirm their email</span></div>'+
       '<p class="hint">When this is on, people get a “tap to confirm” email first. Welcome emails and automations start once they tap it. Fewer typos and fake addresses on your lists, at the cost of some people never confirming.</p>'+
-      '</form><div class="stack"><section class="panel"><h2 class="sec">Social posting</h2><div class="pad stack" style="gap:12px">'+
-        (zr.connected && !zr.simulated
-          ? '<p style="margin:0"><span class="chip sent">Connected</span> Studio posts through Zernio. Connect accounts on the <a href="#/social">Social</a> page.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Replace the key</button><div id="zkHost" hidden></div>'
-          : '<p style="margin:0">Studio posts to Instagram, TikTok, LinkedIn and the rest through Zernio. First 2 accounts free, then $6 a month each.</p><div id="zkHost"></div>')+
+      '</form><div class="stack"><section class="panel"><h2 class="sec">Social posting</h2>'+
+        '<div class="pad"><p style="margin:0">Studio posts straight to each platform through its own developer app. Set one up per platform, then connect accounts on the <a href="#/social">Social</a> page.</p></div>'+
+        '<div class="rows">'+apps.map(function(a){
+          var on=a.configured, chip=a.kind==="password"?'<span class="chip sent">No setup needed</span>':on?'<span class="chip sent">Set up</span>':'<span class="chip draft">Not yet</span>';
+          var sub=a.kind==="password"?"Connect with an app password":on?("App "+a.client_id+(a.options.sandbox?" · sandbox":"")):"Needs Studio’s own app";
+          if(a.accounts) sub+=" · "+a.accounts+" account"+(a.accounts===1?"":"s")+(a.needsReconnect?" ("+a.needsReconnect+" to reconnect)":"");
+          return '<div class="rowi" style="--pc:var(--'+(on?"moss":"brass")+')"><span class="t">'+esc(a.label)+'<small>'+esc(sub)+'</small></span><span class="meta">'+chip+(a.kind==="oauth"?'<button class="btn sm ghost" type="button" data-app="'+esc(a.platform)+'">'+(on?"Change":"Set up")+'</button>':'')+'</span></div>'+
+            '<div id="app-'+esc(a.platform)+'" hidden></div>' }).join("")+'</div>'+
+        '<h2 class="sec">Zernio <span class="hint">Optional. For platforms Studio doesn’t post to itself yet, like LinkedIn and X.</span></h2><div class="pad stack" style="gap:12px">'+
+        (zr.zernio
+          ? '<p style="margin:0"><span class="chip sent">Connected</span> Accounts connected through Zernio keep posting through it.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Replace the key</button><div id="zkHost" hidden></div>'
+          : '<p class="hint" style="margin:0">Not connected. First 2 accounts free, then $6 a month each.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Add a Zernio key</button><div id="zkHost" hidden></div>')+
         '</div></section><section class="panel"><h2 class="sec">Connect Claude</h2><div class="pad stack" style="gap:12px">'+
         '<p style="margin:0">Let Claude draft posts and emails, add files and read your results. It can only save drafts: nothing goes out until you send it here.</p>'+
         '<ol class="steps"><li>In Claude, open <b>Settings → Connectors</b> and choose <b>Add custom connector</b>.</li>'+
@@ -2154,8 +2179,24 @@ function settingsView(){
       $("#zkSave").onclick=function(){ var b=this, val=$("#zkKey").value.trim(); if(!val){ toast("Paste the key first.",true); return } b.disabled=true; b.textContent="Checking…";
         api("PUT","settings/zernio-key",{key:val}).then(function(){ S.social=null; toast("Social posting connected"); route() }).catch(function(e){ b.disabled=false; b.textContent="Save"; toast(e.message,true) }) };
     }
-    if(!(zr.connected && !zr.simulated)) zkForm($("#zkHost"));
     var zk=$("#zkReplace"); if(zk) zk.onclick=function(){ this.hidden=true; zkForm($("#zkHost")) };
+    $$("[data-app]").forEach(function(b){ b.onclick=function(){
+      var a=apps.filter(function(x){ return x.platform===b.dataset.app })[0], host=$("#app-"+a.platform);
+      if(!host.hidden){ host.hidden=true; host.innerHTML=""; return }
+      host.hidden=false;
+      host.innerHTML='<form class="sheet" style="margin:0 18px 16px" autocomplete="off"><p class="hint" style="margin:0">'+esc(a.note)+' <a href="'+esc(a.console)+'" target="_blank" rel="noopener">Open the developer console</a></p>'+
+        '<div class="field"><label>Redirect URI <span class="hint">(paste this into the app’s settings)</span></label><div class="affix"><input type="text" readonly value="'+esc(a.redirect)+'" data-copyv><button class="btn sm" type="button" data-copy style="border:0;border-left:1px solid var(--line)">Copy</button></div></div>'+
+        '<div class="fieldrow"><div class="field"><label for="ac-'+a.platform+'">App ID</label><input type="text" id="ac-'+a.platform+'" maxlength="200" spellcheck="false" value="'+esc(a.client_id)+'"></div>'+
+        '<div class="field"><label for="as-'+a.platform+'">App secret</label><input type="password" id="as-'+a.platform+'" maxlength="300" spellcheck="false" placeholder="'+(a.configured?"Saved. Paste a new one to replace it":"")+'"></div></div>'+
+        (a.platform==="pinterest"?'<label class="actions" style="gap:8px"><input type="checkbox" id="asb-'+a.platform+'"'+(a.options.sandbox?" checked":"")+'> Trial access: post to Pinterest’s sandbox</label>':'')+
+        '<div class="actions"><button class="btn primary sm" type="submit">Save</button>'+(a.configured?'<button class="btn ghost sm" type="button" data-rm>Remove</button>':'')+'</div></form>';
+      var f=host.querySelector("form");
+      host.querySelector("[data-copy]").onclick=function(){ var i=host.querySelector("[data-copyv]"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){ toast("Copied") },function(){ document.execCommand("copy"); toast("Copied") }) };
+      var sendApp=function(body, msg){ return api("PUT","social/apps/"+a.platform, body).then(function(){ toast(msg); route() }).catch(function(e){ toast(e.message,true) }) };
+      f.onsubmit=function(e){ e.preventDefault(); var sb=$("#asb-"+a.platform);
+        sendApp({client_id:$("#ac-"+a.platform).value.trim(), secret:$("#as-"+a.platform).value.trim(), options:{sandbox:!!(sb&&sb.checked)}}, a.label+" app saved") };
+      var rm=host.querySelector("[data-rm]"); if(rm) rm.onclick=function(){ sendApp({client_id:""}, a.label+" app removed") };
+    } });
   });
 }
 

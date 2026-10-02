@@ -1,3 +1,4 @@
+import { runDeliveries, refreshDue } from "./direct/engine";
 import { Env, accentOf, esc, getSettings, id, markdown, now, plainText, slugify } from "./util";
 import { tagUrl } from "./links";
 import { segmentWhere } from "./segments";
@@ -202,6 +203,8 @@ export async function runScheduled(env: Env): Promise<void> {
   await runSequences(env, 300);
   await processQueue(env, 500);
   await syncSocial(env).catch((e) => console.error("Social sync:", e));
+  await runDeliveries(env).catch((e) => console.error("Social deliveries:", e));
+  await refreshDue(env).catch((e) => console.error("Social token refresh:", e));
   const minute = new Date().getUTCMinutes();
   if (minute === 7) await cleanUploads(env).catch((e) => console.error("File cleanup:", e));
   if (minute === 23) await syncMetrics(env).catch((e) => console.error("Performance sync:", e));

@@ -48,6 +48,14 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS draft_batches ( id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', profile_id TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, ready_at INTEGER )",
  "CREATE INDEX IF NOT EXISTS idx_batches_status ON draft_batches(status, created_at)",
  "CREATE TABLE IF NOT EXISTS initiatives ( id TEXT PRIMARY KEY, workspace TEXT NOT NULL DEFAULT 'main', name TEXT NOT NULL, tag TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL DEFAULT '', target INTEGER, starts_at INTEGER, ends_at INTEGER, notes TEXT NOT NULL DEFAULT '', archived INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS social_brands ( id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS social_apps ( platform TEXT PRIMARY KEY, client_id TEXT NOT NULL, secret TEXT NOT NULL, options TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS social_accounts ( id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, platform TEXT NOT NULL, external_id TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '', picture TEXT NOT NULL DEFAULT '', token TEXT NOT NULL, refresh_token TEXT, secret TEXT, expires_at INTEGER, refresh_expires_at INTEGER, token_issued_at INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'ok', status_note TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_brand ON social_accounts(profile_id, platform)",
+ "CREATE TABLE IF NOT EXISTS social_oauth ( state TEXT PRIMARY KEY, platform TEXT NOT NULL, profile_id TEXT NOT NULL, verifier TEXT NOT NULL, created_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS social_deliveries ( id TEXT PRIMARY KEY, post_id TEXT NOT NULL, account_id TEXT NOT NULL, platform TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', step TEXT NOT NULL DEFAULT 'start', data TEXT NOT NULL DEFAULT '{}', attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, locked_until INTEGER NOT NULL DEFAULT 0, external_id TEXT, url TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS idx_deliveries_due ON social_deliveries(status, next_at)",
+ "CREATE INDEX IF NOT EXISTS idx_deliveries_post ON social_deliveries(post_id)",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -75,4 +83,6 @@ export const ALTERS: string[] = [
  "ALTER TABLE pages ADD COLUMN initiative_id TEXT",
  "CREATE INDEX IF NOT EXISTS idx_campaigns_init ON campaigns(initiative_id)",
  "CREATE INDEX IF NOT EXISTS idx_social_init ON social_posts(initiative_id)",
+ "ALTER TABLE social_posts ADD COLUMN zernio_status TEXT",
+ "ALTER TABLE social_posts ADD COLUMN zernio_results TEXT",
 ];

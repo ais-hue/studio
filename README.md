@@ -12,7 +12,7 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 - **Forms** (`src/forms.ts`) pick fields (email, name, custom contact fields) and add people to a list. They work on Studio pages, embedded anywhere (`go.<domain>/f/<id>.js` or an iframe of `go.<domain>/f/<id>`), or posted to as JSON by apps. Custom answers are stored in `contacts.props`.
 - **Smart lists** (`src/segments.ts`) are saved rules compiled to SQL when used: in Contacts, and as a campaign audience (counted at send time).
 - **Automations** start when someone joins a list, clicks a link in a campaign, or is added by hand. The every-minute cron moves people along and queues each email; the send queue delivers it.
-- **Social posts** go out through Zernio (zernio.com). Brands are Zernio profiles; drafts live in Studio, and scheduled posts are handed to Zernio and checked on by the cron.
+- **Social posts** go out straight from Studio (`src/direct/`) for Instagram, Threads, TikTok, Pinterest and Bluesky, through Studio's own developer app on each platform (set up in Settings → Social posting; Bluesky uses an app password instead). Publishing a post queues one delivery per account; the every-minute cron works through each one step by step (upload, wait for the platform to process it, publish), retries hiccups with backoff, and renews tokens before they lapse. Platforms without a Studio app (LinkedIn, X, Facebook) can still go through Zernio (zernio.com) if a Zernio key is added; a post can mix both, and its status combines the two. Brands are Studio's own (`br_…`) or older Zernio profiles.
 - **Tracked links**: links in social posts become `go.<domain>/l/<code>` (UTM-tagged; bots ignored). Links to Studio sites carry `sref=<code>`, which the signup form sends back so the new contact is credited to that post and platform. No cookies.
 - **Performance**: every hour (minute 23) Studio pulls likes, comments, shares and reach from Zernio's analytics for posts from the last 90 days, and works out best days and times per brand.
 - **Files** live in R2 (binding `FILES`, bucket `studio-files`) and are served publicly at `files.<domain>/<key>`. Big files upload in 50 MB parts.
@@ -31,6 +31,19 @@ Cloudflare builds and deploys every push to `main` automatically.
 - `RESEND_API_KEY` (secret) – email sending
 - `ADMIN_EMAILS` – who can sign in to the studio by email link
 - The Zernio API key and the Resend webhook signing secret are saved from Studio's Settings page (or can be set as the `ZERNIO_API_KEY` / `RESEND_WEBHOOK_SECRET` secrets).
+- `SOCIAL_KEY` (secret, recommended) – encrypts social account tokens and app secrets. Without it Studio makes its own key and keeps it in the database. Values record which key sealed them, so adding the secret later is safe; removing it once it's in use is not.
+- Cloudflare **Images → Transformations** switched on for the zone: Instagram only takes JPEGs and Bluesky caps pictures at about 1 MB, so Studio converts its own files on the fly through `files.<domain>/cdn-cgi/image/…`.
+
+## Platform apps for direct posting
+
+Each platform's redirect URI is `https://studio.<domain>/social/callback/<platform>` (Settings shows it with a Copy button). Before review, every platform only lets the app post to the developer's own accounts:
+
+- **Instagram / Threads (Meta):** add your accounts as Instagram/Threads testers. Customers' accounts need App Review (screencast per permission) and Business Verification.
+- **TikTok:** posts are forced to private until the app passes TikTok's audit. Photo posts also need `files.<domain>` verified as a URL prefix.
+- **Pinterest:** trial access posts to the sandbox only (tick Sandbox). Standard access needs a video of the OAuth flow and pinning.
+- **Bluesky:** nothing to set up.
+
+To try the engine locally, save any platform's app with the ID `simulate`, or connect Bluesky with a handle ending `.simulate`. Captions with `#fail` fail for good; `#flaky` fails once, then goes through.
 
 ## Local testing
 

@@ -13,7 +13,8 @@ import { getBrief, reviewQueue, saveBrief, tidyBatches } from "./producer";
 import { importUrl } from "./mcp";
 import { Kind, createInitiative, deleteInitiative, initiativeDetail, listInitiatives, setInitiative, updateInitiative } from "./initiatives";
 import { FREE_BYTES, FileRow, fileUrl, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
-import { PLATFORMS, SocialPost, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
+import { appsStatus, saveApp, connectPassword } from "./direct/engine";
+import { PLATFORMS, SocialPost, connectMode, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -844,8 +845,15 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       return json({ brand: await renameProfile(env, s2, name) });
     }
     if (s1 === "brands" && s2 && s3 === "accounts" && m === "GET") return json({ accounts: await listAccounts(env, s2) });
+    if (s1 === "apps" && !s2 && m === "GET") return json({ apps: await appsStatus(env, `${url.protocol}//${url.host}`) });
+    if (s1 === "apps" && s2 && m === "PUT") { await saveApp(env, s2, await body(req)); return json({ apps: await appsStatus(env, `${url.protocol}//${url.host}`) }); }
     if (s1 === "brands" && s2 && s3 === "connect" && m === "POST") {
       const d = await body(req);
+      const platform = str(d.platform, 20);
+      if ((await connectMode(env, platform, s2)) === "password") {
+        if (!d.handle) return json({ password: true });
+        return json({ account: await connectPassword(env, platform, s2, str(d.handle, 200), str(d.password, 100)) }, 201);
+      }
       const back = `https://${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
       const localBack = `${url.protocol}//${url.host}/social/connected?brand=${encodeURIComponent(s2)}`;
       return json({ url: await connectUrl(env, str(d.platform, 20), s2, url.protocol === "https:" ? back : localBack) });
@@ -905,7 +913,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
           } else if (action === "delete") {
             if (p.status === "publishing") throw new HttpError(409, "Going out right now.");
             if (p.status === "scheduled") await unschedule(env, p);
-            await env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id).run();
+            await env.DB.batch([env.DB.prepare("DELETE FROM social_deliveries WHERE post_id = ?").bind(p.id), env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id)]);
             done.push({ id: p.id });
           } else throw new HttpError(400, "Unknown action.");
         } catch (e) {
@@ -1002,13 +1010,19 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         const options = d.options !== undefined ? JSON.stringify(d.options || {}).slice(0, 5000) : p.options;
         const planned = d.planned_at !== undefined ? (Number(d.planned_at) > 0 ? Number(d.planned_at) : null) : (p as any).planned_at ?? null;
         await env.DB.prepare("UPDATE social_posts SET content = ?, media = ?, targets = ?, options = ?, planned_at = ?, updated_at = ? WHERE id = ?").bind(content, media, targets, options, planned, t, p.id).run();
+        if (p.status === "failed" && !p.zernio_id) { // edited after failing: start again as a draft
+          await env.DB.batch([
+            env.DB.prepare("DELETE FROM social_deliveries WHERE post_id = ?").bind(p.id),
+            env.DB.prepare("UPDATE social_posts SET status = 'draft', results = '[]', error = NULL WHERE id = ?").bind(p.id),
+          ]);
+        }
         return json({ post: view(await get(p.id)) });
       }
       if (s2 && !s3 && m === "DELETE") {
         const p = await get(s2);
         if (p.status === "scheduled") await unschedule(env, p);
         if (p.status === "publishing") throw new HttpError(409, "This post is going out right now. Try again in a minute.");
-        await env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id).run();
+        await env.DB.batch([env.DB.prepare("DELETE FROM social_deliveries WHERE post_id = ?").bind(p.id), env.DB.prepare("DELETE FROM social_posts WHERE id = ?").bind(p.id)]);
         return json({ ok: true });
       }
       if (s2 && s3 === "publish" && m === "POST") {
