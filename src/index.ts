@@ -9,6 +9,7 @@ import { serveFile } from "./files";
 import { authorize, studioProvider } from "./oauth";
 import { handleUploadLink } from "./uploads";
 import { finishConnect } from "./direct/engine";
+import { legalPage } from "./legal";
 
 let schemaReady: Promise<unknown> | null = null;
 async function applySchema(env: Env) {
@@ -27,6 +28,8 @@ async function studio(req: Request, env: Env, ctx: ExecutionContext): Promise<Re
   const url = new URL(req.url);
   if (url.pathname === "/__proof/site.css") return serveStatic(req, env, "/site.css");
   if (url.pathname.startsWith("/__proof/fonts/")) return serveStatic(req, env, url.pathname.replace("/__proof", ""));
+  const legal = legalPage(env, url.pathname);
+  if (legal) return legal;
   if (url.pathname === "/oauth/authorize") return authorize(req, env as any);
   if (url.pathname.startsWith("/up/")) return handleUploadLink(req, env, url.pathname);
   if (url.pathname === "/login" || url.pathname.startsWith("/auth/")) {
