@@ -16,9 +16,10 @@ var TEMPLATES = {
   links:{name:"Link hub", blurb:"Link-in-bio list plus signup."},
   post:{name:"Journal post", blurb:"Written post, listed under Journal."}
 };
+function tplName(t){ return t==="blocks" ? "Blocks" : (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610080015";
+var VERSION = "202610080100";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -265,12 +266,20 @@ function siteView(sid, tab, pageId){
   });
 }
 
+/* Block pages: shown read-only here until the block editor lands, so the old editor can't overwrite their blocks. */
+function blockPagePreview(host, site, p){
+  host.innerHTML='<div class="editor"><div class="panel"><h2 class="sec">'+esc(p.title)+'</h2><div class="pad stack" style="gap:10px"><p style="margin:0">This page is built from blocks.</p><p class="hint" style="margin:0">The block editor is on its way. Until then this page can be switched on and off here, and Claude can change it.</p></div></div>'+
+    '<div class="proof"><div class="proofbar"><span class="url">https://'+esc(hostOf(site))+'/'+esc(p.slug)+'</span></div><iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
+  var c={}; try{ c=JSON.parse(p.content||"{}") }catch(e){}
+  api("POST","preview",{ site_id:site.id, page:{ id:p.id, slug:p.slug, title:p.title, template:"blocks", content:c, created_at:p.created_at } }).then(function(html){ var f=$("#pv"); if(f) f.srcdoc=html }).catch(function(){});
+}
+
 function sitePages(site, pages, pageId){
   var body=$("#tabBody"), newTpl="waitlist";
   var sel = pages.filter(function(p){return p.id===pageId})[0] || pages[0];
   function rowsHtml(){
     return '<div class="rows">'+pages.map(function(p){
-      return '<div class="rowi" style="--pc:var(--'+esc(site.accent)+')" aria-current="'+(sel&&p.id===sel.id)+'"><a class="t" href="#/sites/'+site.id+'/pages/'+p.id+'" style="text-decoration:none">'+esc(p.title)+'<small>/'+esc(p.slug)+' · '+esc(TEMPLATES[p.template].name)+' · '+p.views+' view'+(p.views===1?'':'s')+'</small></a>'+
+      return '<div class="rowi" style="--pc:var(--'+esc(site.accent)+')" aria-current="'+(sel&&p.id===sel.id)+'"><a class="t" href="#/sites/'+site.id+'/pages/'+p.id+'" style="text-decoration:none">'+esc(p.title)+'<small>/'+esc(p.slug)+' · '+esc(tplName(p.template))+' · '+p.views+' view'+(p.views===1?'':'s')+'</small></a>'+
         '<span class="meta"><span class="chip '+(p.published?"published":"off")+'">'+(p.published?"Live":"Off")+'</span><button type="button" class="switch" role="switch" data-pub="'+p.id+'" aria-checked="'+(!!p.published)+'" aria-label="'+(p.published?"Take ":"Put ")+esc(p.title)+(p.published?" offline":" live")+'"></button></span></div>' }).join("")+'</div>';
   }
   function render(showNew){
@@ -298,6 +307,7 @@ function sitePages(site, pages, pageId){
   }
   function editor(){
     var host=$("#editorHost"), p=sel, c={};
+    if(p.template==="blocks"){ blockPagePreview(host, site, p); return }
     try{ c=JSON.parse(p.content||"{}") }catch(e){}
     var previewTheme = store("proof.pvtheme")||"site";
     host.innerHTML='<div class="editor"><form class="form panel" id="edForm" autocomplete="off">'+

@@ -85,4 +85,5 @@ export const ALTERS: string[] = [
  "CREATE INDEX IF NOT EXISTS idx_social_init ON social_posts(initiative_id)",
  "ALTER TABLE social_posts ADD COLUMN zernio_status TEXT",
  "ALTER TABLE social_posts ADD COLUMN zernio_results TEXT",
+ "ALTER TABLE pages ADD COLUMN previous TEXT",
 ];
