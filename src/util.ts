@@ -2,6 +2,7 @@ export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   ROOT_DOMAIN: string;
+  IMAGE_TRANSFORMS?: string;   // "1" once Cloudflare Images → Transformations is on for the zone
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   DEV_AUTH: string;

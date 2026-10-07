@@ -37,7 +37,7 @@ Cloudflare builds and deploys every push to `main` automatically.
 - `ADMIN_EMAILS` – who can sign in to the studio by email link
 - The Zernio API key and the Resend webhook signing secret are saved from Studio's Settings page (or can be set as the `ZERNIO_API_KEY` / `RESEND_WEBHOOK_SECRET` secrets).
 - `SOCIAL_KEY` (secret, recommended) – encrypts social account tokens and app secrets. Without it Studio makes its own key and keeps it in the database. Values record which key sealed them, so adding the secret later is safe; removing it once it's in use is not.
-- Cloudflare **Images → Transformations** switched on for the zone: Instagram only takes JPEGs and Bluesky caps pictures at about 1 MB, so Studio converts its own files on the fly through `files.<domain>/cdn-cgi/image/…`.
+- Cloudflare **Images → Transformations** switched on for the zone, then the `IMAGE_TRANSFORMS` variable set to `1` so block pages serve resized images (without it they use the original files): Instagram only takes JPEGs and Bluesky caps pictures at about 1 MB, so Studio converts its own files on the fly through `files.<domain>/cdn-cgi/image/…`.
 
 ## Platform apps for direct posting
 

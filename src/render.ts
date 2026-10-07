@@ -26,6 +26,7 @@ export interface RenderOpts {
   joined?: boolean | "confirm";
   form?: import("./forms").PublicForm | null;  // a custom form chosen for this page
   root?: string;          // ROOT_DOMAIN: tracked links and resized images on block pages
+  resize?: boolean;       // Cloudflare image transformations are on, so block pages can serve resized images
 }
 
 const fmtDate = (ms: number) =>
@@ -150,7 +151,7 @@ function renderBlockPage(site: Site, page: Page, content: BlocksContent, o: Rend
   const desc = content.description || hero?.sub || site.tagline || "";
   const root = o.root || o.host.split(".").slice(-2).join(".");
   const body = renderBlocks(content, {
-    root, title: page.title, firstHeading: !hero,
+    root, resize: !!o.resize, title: page.title, firstHeading: !hero,
     // Each signup block uses the page's chosen form when it asked for it, and the standard name and email form otherwise.
     signup: (b) => signup(page, { cta: b.cta || "", form: true }, { ...o, form: b.form_id && o.form?.id === b.form_id ? o.form : null }),
   });
