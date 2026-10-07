@@ -8,7 +8,7 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 
 ## Block pages
 
-A page with template `blocks` is an ordered list of blocks (`src/blocks.ts`): hero, text, image, gallery, store buttons, features, quote, FAQ, signup, links, video and divider. Each has a background (page, soft, accent), spacing and a hidden switch; colours and type come from the site, so pages stay readable in light and dark and on phones. `cleanBlocks()` validates everything that is saved. Store buttons get tracked links when a page is saved (`source_type = 'page'`). Old template pages render as before; `POST /api/pages/<id>/convert` turns one into blocks and keeps the old version for `/unconvert`.
+A page with template `blocks` is an ordered list of blocks (`src/blocks.ts`): hero, text, image, gallery, store buttons, features, quote, FAQ, signup, links, video and divider. Each has a background (page, soft, accent), spacing and a hidden switch; colours and type come from the site, so pages stay readable in light and dark and on phones. `cleanBlocks()` validates everything that is saved. Store buttons get tracked links when a page is saved (`source_type = 'page'`). The block editor (Sites → a page) lists blocks with add-between, drag or arrow reordering, duplicate, hide and delete with undo, and a live laptop/phone preview that follows the block being edited. Old template pages render as before and offer “Switch to blocks”; `POST /api/pages/<id>/convert` turns one into blocks and keeps the old version for `/unconvert`.
 
 ## How email flows
 

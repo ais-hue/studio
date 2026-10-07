@@ -11,15 +11,16 @@ function slugify(s){ return String(s||"").toLowerCase().normalize("NFKD").replac
 function store(k,v){ try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v) }catch(e){ return null } }
 var ACCENTS = [["moss","Sage"],["brass","Sand"],["oxblood","Coral"],["plum","Lilac"],["slate","Blue"]];
 var TEMPLATES = {
+  blocks:{name:"Blocks", blurb:"Build it from sections: hero, screenshots, store buttons, FAQ and more."},
   waitlist:{name:"Waitlist", blurb:"Big headline, one line, signup."},
   launch:{name:"Launch page", blurb:"Headline, selling points, signup."},
   links:{name:"Link hub", blurb:"Link-in-bio list plus signup."},
   post:{name:"Journal post", blurb:"Written post, listed under Journal."}
 };
-function tplName(t){ return t==="blocks" ? "Blocks" : (TEMPLATES[t]||{name:t}).name }
+function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610080100";
+var VERSION = "202610080200";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -266,16 +267,252 @@ function siteView(sid, tab, pageId){
   });
 }
 
-/* Block pages: shown read-only here until the block editor lands, so the old editor can't overwrite their blocks. */
-function blockPagePreview(host, site, p){
-  host.innerHTML='<div class="editor"><div class="panel"><h2 class="sec">'+esc(p.title)+'</h2><div class="pad stack" style="gap:10px"><p style="margin:0">This page is built from blocks.</p><p class="hint" style="margin:0">The block editor is on its way. Until then this page can be switched on and off here, and Claude can change it.</p></div></div>'+
-    '<div class="proof"><div class="proofbar"><span class="url">https://'+esc(hostOf(site))+'/'+esc(p.slug)+'</span></div><iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
+/* ============ block editor ============ */
+var BLOCK_DEFS = {
+  hero:{name:"Hero", blurb:"Headline, a line, buttons, a picture"},
+  text:{name:"Text", blurb:"Paragraphs, headings, lists, links"},
+  image:{name:"Image", blurb:"One picture with a caption"},
+  gallery:{name:"Screenshots", blurb:"A row of app screenshots"},
+  store:{name:"Store buttons", blurb:"App Store and Google Play, tracked"},
+  features:{name:"Features", blurb:"Two to six short points"},
+  quote:{name:"Quote", blurb:"A review or a line of praise"},
+  faq:{name:"FAQ", blurb:"Questions that open to answers"},
+  signup:{name:"Signup", blurb:"Collect emails for a list"},
+  links:{name:"Links", blurb:"A stack of link buttons"},
+  video:{name:"Video", blurb:"A video file or YouTube link"},
+  divider:{name:"Divider", blurb:"A line or a gap"}
+};
+var BLOCK_ORDER=["hero","text","image","gallery","store","features","quote","faq","signup","links","video","divider"];
+function newBlockId(){ return "b"+Math.random().toString(36).slice(2,10) }
+function blankBlock(type){
+  var b={id:newBlockId(), type:type, bg:"page", space:"normal"};
+  if(type==="hero"){ b.headline="A headline that says what it is"; b.sub=""; b.eyebrow=""; b.align="left"; b.buttons=[] }
+  if(type==="text") b.md="";
+  if(type==="gallery"){ b.items=[]; b.frame="phone" }
+  if(type==="features") b.items=[{title:"",text:""},{title:"",text:""},{title:"",text:""}];
+  if(type==="faq") b.items=[{q:"",a:""}];
+  if(type==="links") b.items=[{label:"",url:""}];
+  if(type==="signup"){ b.heading="Get the news"; b.cta="Keep me posted" }
+  if(type==="divider") b.style="rule";
+  if(type==="image") b.width="column";
+  return b;
+}
+/** One line that tells blocks apart in the list. */
+function blockSummary(b){
+  var t = b.headline || b.heading || b.text || b.caption || b.label || (b.type==="signup"&&b.cta?"Button: "+b.cta:"") || (b.md||"").replace(/[#*_>\[\]()`-]/g," ").trim() ||
+    (b.items&&b.items[0]&&(b.items[0].title||b.items[0].q||b.items[0].label)) || (b.type==="store"?[b.apple?"App Store":"",b.google?"Google Play":""].filter(Boolean).join(" + "):"") || "";
+  return String(t).replace(/\s+/g," ").slice(0,70);
+}
+function blockNeeds(b){
+  var it=b.items||[];
+  if(b.type==="hero"&&!b.headline) return "Add a headline";
+  if(b.type==="image"&&!b.url) return "Pick an image";
+  if(b.type==="image"&&!b.alt) return "Describe the image";
+  if(b.type==="gallery"&&it.length<2) return "Add two or more screenshots";
+  if(b.type==="gallery"&&it.some(function(x){return !x.alt})) return "Describe each screenshot";
+  if(b.type==="store"&&!b.apple&&!b.google) return "Add a store link";
+  if(b.type==="features"&&it.filter(function(x){return x.title||x.text}).length<2) return "Fill in two or more";
+  if(b.type==="faq"&&!it.some(function(x){return x.q&&x.a})) return "Add a question and answer";
+  if(b.type==="links"&&!it.some(function(x){return x.label&&x.url})) return "Add a link";
+  if(b.type==="video"&&!b.url) return "Add a video";
+  if(b.type==="quote"&&!b.text) return "Add the quote";
+  return "";
+}
+
+function blockEditor(host, site, p, onConverted){
   var c={}; try{ c=JSON.parse(p.content||"{}") }catch(e){}
-  api("POST","preview",{ site_id:site.id, page:{ id:p.id, slug:p.slug, title:p.title, template:"blocks", content:c, created_at:p.created_at } }).then(function(html){ var f=$("#pv"); if(f) f.srcdoc=html }).catch(function(){});
+  var blocks=Array.isArray(c.blocks)?c.blocks:[];
+  var meta={description:c.description||"", share_image:c.share_image||""};
+  var openId=null, insertAt=-1, dragFrom=-1;
+  var previewTheme=store("proof.pvtheme")||"site";
+  var hasPrev=!!p.previous;
+  host.innerHTML='<div class="editor beditor"><div class="form panel" id="beForm">'+
+    '<h2 class="sec">Edit page <span class="saving" id="edSave">Saved</span></h2>'+
+    '<details class="bsettings"><summary>Page settings</summary><div class="stack" style="gap:12px;padding:4px 18px 16px">'+
+      '<div class="field"><label for="pTitle">Page name</label><input type="text" id="pTitle" maxlength="80" value="'+esc(p.title)+'"></div>'+
+      (p.slug!=="" ? '<div class="field"><label for="pSlug">Address</label><div class="affix"><span>/</span><input type="text" id="pSlug" maxlength="60" value="'+esc(p.slug)+'"></div><span class="hint">Lives at '+esc(hostOf(site))+'/<span id="slugEcho">'+esc(p.slug)+'</span></span></div>' : '<p class="hint" style="margin:0">This is the home page at '+esc(hostOf(site))+'.</p>')+
+      '<div class="field"><label for="pDesc">Description for search and sharing</label><textarea id="pDesc" maxlength="300" rows="2">'+esc(meta.description)+'</textarea><span class="hint">Shown under the title in Google and in link previews. Leave empty to use the hero’s line.</span></div>'+
+      '<div class="field"><span class="label">Share image</span><div id="pShare"></div><span class="hint">Shown when the page is shared. Leave empty to use the hero picture.</span></div>'+
+      (hasPrev?'<button type="button" class="btn sm ghost" id="pUnconvert" style="align-self:flex-start">Go back to the old version of this page</button>':'')+
+      (p.slug!==""?'<div class="actions"><button type="button" class="btn sm danger" id="delPage">Delete page</button></div><div id="delConfirm"></div>':'')+
+    '</div></details>'+
+    '<ol class="blist" id="blist" aria-label="Blocks"></ol></div>'+
+    '<div class="proof"><div class="proofbar"><span class="url">https://'+esc(hostOf(site))+'/<span id="pvSlug">'+esc(p.slug)+'</span></span>'+
+      '<div class="seg" role="group" aria-label="Preview size"><button type="button" data-pw="full" aria-pressed="true">Laptop</button><button type="button" data-pw="phone" aria-pressed="false">Phone</button></div>'+
+      '<div class="seg" role="group" aria-label="Preview theme"><button type="button" data-pv="site" aria-pressed="'+(previewTheme==="site")+'">Site</button><button type="button" data-pv="light" aria-pressed="'+(previewTheme==="light")+'">Light</button><button type="button" data-pv="dark" aria-pressed="'+(previewTheme==="dark")+'">Dark</button></div></div>'+
+      '<div class="pvwrap" id="pvwrap"><iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div></div>';
+
+  var save = saver($("#edSave"), function(data){
+    return api("PATCH","pages/"+p.id,data).then(function(r){ p.title=r.page.title; p.slug=r.page.slug; p.content=r.page.content;
+      var sl=$("#pSlug"); if(sl && document.activeElement!==sl && sl.value!==r.page.slug) sl.value=r.page.slug;
+      $("#pvSlug").textContent=r.page.slug; var se=$("#slugEcho"); if(se) se.textContent=r.page.slug });
+  });
+  function content(){ return {blocks:blocks, description:meta.description, share_image:meta.share_image} }
+  function changed(){ save({content:JSON.parse(JSON.stringify(content()))}); preview() }
+
+  /* ----- preview, keeping the scroll position between reloads ----- */
+  var pvTimer, pvScroll=0, scrollTo=null;
+  function preview(){
+    clearTimeout(pvTimer);
+    pvTimer=setTimeout(function(){
+      var f=$("#pv"); try{ pvScroll=f&&f.contentWindow?f.contentWindow.scrollY:0 }catch(e){}
+      api("POST","preview",{ site_id:site.id, theme: previewTheme==="site"?undefined:previewTheme, page:{ id:p.id, slug:($("#pSlug")||{value:p.slug}).value, title:$("#pTitle").value, template:"blocks", content:content(), created_at:p.created_at } })
+        .then(function(html){ var f=$("#pv"); if(!f) return;
+          f.onload=function(){ try{ var w=f.contentWindow, el=scrollTo&&w.document.getElementById(scrollTo);
+            if(el){ w.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + w.scrollY - 24)); scrollTo=null } else w.scrollTo(0,pvScroll) }catch(e){} };
+          f.srcdoc=html }).catch(function(){});
+    }, 300);
+  }
+  S.cleanup.push(function(){ clearTimeout(pvTimer) });
+
+  /* ----- fields ----- */
+  function get(b, path){ return path.split(".").reduce(function(o,k){ return o==null?undefined:o[k] }, b) }
+  function set(b, path, v){ var ks=path.split("."), o=b; for(var i=0;i<ks.length-1;i++){ if(o[ks[i]]==null) o[ks[i]]=/^\d+$/.test(ks[i+1])?[]:{}; o=o[ks[i]] } o[ks[ks.length-1]]=v }
+  var uid=0;
+  function txt(b, path, label, o){ o=o||{}; var id="bf"+(++uid), v=get(b,path)||"";
+    return '<div class="field"><label for="'+id+'">'+esc(label)+'</label>'+(o.area?'<textarea id="'+id+'" data-k="'+path+'" rows="'+(o.rows||3)+'" maxlength="'+(o.max||2000)+'"'+(o.ph?' placeholder="'+esc(o.ph)+'"':'')+(o.code?' class="code"':'')+'>'+esc(v)+'</textarea>':'<input type="'+(o.type||"text")+'" id="'+id+'" data-k="'+path+'" maxlength="'+(o.max||200)+'" value="'+esc(v)+'"'+(o.ph?' placeholder="'+esc(o.ph)+'"':'')+'>')+(o.hint?'<span class="hint">'+o.hint+'</span>':'')+'</div>' }
+  function sel(b, path, label, opts){ var id="bf"+(++uid), v=get(b,path);
+    return '<div class="field"><label for="'+id+'">'+esc(label)+'</label><select id="'+id+'" data-k="'+path+'">'+opts.map(function(x){ return '<option value="'+esc(x[0])+'"'+(v===x[0]?" selected":"")+'>'+esc(x[1])+'</option>' }).join("")+'</select></div>' }
+  function seg(b, path, label, opts){ var v=get(b,path)||opts[0][0];
+    return '<div class="field"><span class="label">'+esc(label)+'</span><div class="seg" role="group" aria-label="'+esc(label)+'">'+opts.map(function(x){ return '<button type="button" data-seg="'+path+'" data-v="'+esc(x[0])+'" aria-pressed="'+(v===x[0])+'">'+esc(x[1])+'</button>' }).join("")+'</div></div>' }
+  /** An image chooser: thumbnail, Choose / Remove, and its description for screen readers. */
+  function imageField(urlPath, altPath, label, b){
+    var u=get(b,urlPath)||"", a=altPath?get(b,altPath)||"":"", id="bf"+(++uid);
+    return '<div class="field bimg"><span class="label">'+esc(label)+'</span><div class="bimgrow">'+(u?'<img src="'+esc(u)+'" alt="">':'<span class="bimgnone">No image</span>')+
+      '<div class="actions">'+(S.me.files?'<button type="button" class="btn sm" data-pick="'+urlPath+'"'+(altPath?' data-alt="'+altPath+'"':'')+'>'+(u?"Change":"Choose")+'</button>':'')+(u?'<button type="button" class="btn sm ghost" data-unpick="'+urlPath+'">Remove</button>':'')+'</div></div>'+
+      (S.me.files?'':'<input type="url" data-k="'+urlPath+'" placeholder="https://…" value="'+esc(u)+'">')+
+      (altPath?'<label class="sr" for="'+id+'">Describe the image</label><input type="text" id="'+id+'" data-k="'+altPath+'" maxlength="200" placeholder="Describe it for people using screen readers" value="'+esc(a)+'">':'')+'</div>' }
+  function rows(b, key, cols, addLabel, max){
+    var items=b[key]||[];
+    return '<div class="brows" data-rows="'+key+'">'+items.map(function(it,i){
+      return '<div class="brow"><div class="stack" style="gap:8px;flex:1;min-width:0">'+cols.map(function(cdef){ return cdef[2]==="img" ? imageField(key+"."+i+".url", key+"."+i+".alt", cdef[1], b) : txt(b, key+"."+i+"."+cdef[0], cdef[1], cdef[2]) }).join("")+'</div>'+
+        '<div class="browtools"><button type="button" class="ico" data-rowup="'+key+'" data-i="'+i+'" aria-label="Move up"'+(i===0?" disabled":"")+'>↑</button><button type="button" class="ico" data-rowdel="'+key+'" data-i="'+i+'" aria-label="Remove">✕</button></div></div>' }).join("")+
+      (items.length<max?'<button type="button" class="btn sm" data-rowadd="'+key+'">'+esc(addLabel)+'</button>':'')+'</div>' }
+
+  function fieldsFor(b){
+    var h="";
+    if(b.type==="hero"){
+      h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. Out now on iPhone"})+txt(b,"headline","Headline",{max:160})+txt(b,"sub","Line under it",{area:true,rows:2,max:400});
+      h+='<span class="label">Buttons</span>'+rows(b,"buttons",[["label","Button words",{max:40}],["url","Goes to",{max:1000,ph:"https://… or /page"}]],"Add a button",2);
+      (b.buttons||[]).forEach(function(x,i){ if(!x.style) x.style=i?"plain":"primary" });
+      h+=imageField("image.url","image.alt","Picture",b)+(b.image&&b.image.url?seg(b,"image.frame","Picture style",[["none","Plain"],["phone","In a phone"]]):"");
+      h+=seg(b,"align","Line up",[["left","Left"],["center","Centre"]]);
+    }
+    if(b.type==="text") h+=txt(b,"md","Text",{area:true,rows:8,max:20000,code:true,hint:"## for a heading, - for a list, **bold**, [words](link)."});
+    if(b.type==="image") h+=imageField("url","alt","Image",b)+txt(b,"caption","Caption",{max:200})+seg(b,"width","Width",[["column","Text width"],["full","Full width"]]);
+    if(b.type==="gallery"){
+      h+='<div class="bshots">'+(b.items||[]).map(function(x,i){ return '<div class="bshot"><img src="'+esc(x.url)+'" alt=""><input type="text" data-k="items.'+i+'.alt" maxlength="200" placeholder="Describe this screenshot" aria-label="Describe screenshot '+(i+1)+'" value="'+esc(x.alt||"")+'"><div class="actions"><button type="button" class="ico" data-rowup="items" data-i="'+i+'" aria-label="Move left"'+(i===0?" disabled":"")+'>←</button><button type="button" class="ico" data-rowdel="items" data-i="'+i+'" aria-label="Remove">✕</button></div></div>' }).join("")+'</div>';
+      if((b.items||[]).length<10&&S.me.files) h+='<button type="button" class="btn sm" data-pickmany="items">Add screenshots</button>';
+      h+=seg(b,"frame","Style",[["phone","In phones"],["none","Plain"]])+txt(b,"caption","Caption",{max:200});
+    }
+    if(b.type==="store") h+=txt(b,"heading","Heading",{max:120,ph:"e.g. Get Seek"})+txt(b,"apple","App Store link",{max:500,ph:"https://apps.apple.com/app/…"})+txt(b,"google","Google Play link",{max:500,ph:"https://play.google.com/store/apps/details?id=…"})+txt(b,"note","Small print",{max:200,ph:"e.g. Free to start, no ads."})+'<p class="hint" style="margin:0">Taps are counted with your other tracked links.</p>';
+    if(b.type==="features") h+=txt(b,"heading","Heading",{max:120})+rows(b,"items",[["title","Point",{max:80}],["text","One line",{max:300}]],"Add a point",6);
+    if(b.type==="quote") h+=txt(b,"text","Quote",{area:true,rows:3,max:600})+txt(b,"who","Who said it",{max:120});
+    if(b.type==="faq") h+=txt(b,"heading","Heading",{max:120,ph:"e.g. Questions"})+rows(b,"items",[["q","Question",{max:200}],["a","Answer",{area:true,rows:3,max:3000}]],"Add a question",30);
+    if(b.type==="signup"){
+      h+=txt(b,"heading","Heading",{max:120})+txt(b,"text","Line under it",{max:400})+txt(b,"cta","Button words",{max:40});
+      h+=sel(b,"form_id","Form",[["","Standard: name and email"]].concat((S.forms||[]).map(function(f){ return [f.id, f.name+(f.status!=="active"?" (off)":"")] })));
+    }
+    if(b.type==="links") h+=txt(b,"heading","Heading",{max:120})+rows(b,"items",[["label","Words",{max:80}],["url","Goes to",{max:1000,ph:"https://…"}]],"Add a link",30);
+    if(b.type==="video") h+=txt(b,"url","Video",{max:1000,ph:"YouTube link, or a video file’s link",hint:S.me.files?'<button type="button" class="linkbtn" data-pickvideo="url">Choose a video from Files</button>':""})+(b.url&&!/youtu/.test(b.url)?imageField("poster",null,"Still shown before it plays",b):"")+txt(b,"caption","Caption",{max:200});
+    if(b.type==="divider") h+=seg(b,"style","Kind",[["rule","A line"],["space","Just space"]]);
+    if(b.type!=="divider") h+='<div class="fieldrow">'+seg(b,"bg","Background",[["page","Page"],["soft","Soft"],["accent","Accent"]])+seg(b,"space","Spacing",[["tight","Tight"],["normal","Normal"],["airy","Airy"]])+'</div>';
+    return h;
+  }
+
+  /* ----- the list ----- */
+  function insertRow(i){
+    if(insertAt!==i) return '<li class="binsert"><button type="button" data-ins="'+i+'" aria-label="Add a block here"><span>+ Add block</span></button></li>';
+    return '<li class="bpicker"><div class="actions" style="justify-content:space-between"><b>Add a block</b><button type="button" class="btn sm ghost" data-insx>Cancel</button></div><div class="bptypes">'+
+      BLOCK_ORDER.map(function(t){ return '<button type="button" data-new="'+t+'"><b>'+BLOCK_DEFS[t].name+'</b><span>'+BLOCK_DEFS[t].blurb+'</span></button>' }).join("")+'</div></li>';
+  }
+  function draw(){
+    var h=insertRow(0);
+    blocks.forEach(function(b,i){
+      var open=b.id===openId, need=blockNeeds(b);
+      h+='<li class="bcard'+(open?" open":"")+(b.hidden?" hid":"")+'" data-bi="'+i+'" draggable="false">'+
+        '<div class="bhead"><button type="button" class="bdrag" data-drag="'+i+'" aria-label="Drag to move" title="Drag to move">⋮⋮</button>'+
+        '<button type="button" class="btoggle" data-open="'+esc(b.id)+'" aria-expanded="'+open+'"><b>'+esc(BLOCK_DEFS[b.type]?BLOCK_DEFS[b.type].name:b.type)+'</b><span>'+(b.hidden?'Hidden · ':'')+esc(blockSummary(b)||"Empty")+'</span>'+(need?'<em class="warnx">'+esc(need)+'</em>':'')+'</button>'+
+        '<span class="btools"><button type="button" class="ico" data-up="'+i+'" aria-label="Move up"'+(i===0?" disabled":"")+'>↑</button><button type="button" class="ico" data-down="'+i+'" aria-label="Move down"'+(i===blocks.length-1?" disabled":"")+'>↓</button></span></div>'+
+        (open?'<div class="bbody stack" style="gap:12px">'+fieldsFor(b)+
+          '<div class="actions bfoot"><button type="button" class="btn sm ghost" data-dup="'+i+'">Duplicate</button><button type="button" class="btn sm ghost" data-hide="'+i+'">'+(b.hidden?"Show":"Hide")+'</button><button type="button" class="btn sm ghost danger" data-del="'+i+'">Delete</button></div><div data-delhost="'+i+'"></div></div>':'')+
+        '</li>'+insertRow(i+1);
+    });
+    if(!blocks.length) h+='<li class="empty" style="margin:0 18px 18px">No blocks yet. Add the first one above.</li>';
+    $("#blist").innerHTML=h;
+    wire();
+  }
+  function move(from, to){ if(to<0||to>=blocks.length||from===to) return; var b=blocks.splice(from,1)[0]; blocks.splice(to,0,b); draw(); changed() }
+  function wire(){
+    var L=$("#blist");
+    $$("[data-ins]",L).forEach(function(x){ x.onclick=function(){ insertAt=+x.dataset.ins; draw(); var t=$(".bpicker button[data-new]",L); if(t) t.focus() } });
+    $$("[data-insx]",L).forEach(function(x){ x.onclick=function(){ insertAt=-1; draw() } });
+    $$("[data-new]",L).forEach(function(x){ x.onclick=function(){ var b=blankBlock(x.dataset.new); blocks.splice(insertAt,0,b); insertAt=-1; openId=b.id; scrollTo=b.id; draw(); changed(); var f=$('.bcard.open input,.bcard.open textarea',L); if(f) f.focus() } });
+    $$("[data-open]",L).forEach(function(x){ x.onclick=function(){ openId = openId===x.dataset.open?null:x.dataset.open; if(openId){ scrollTo=openId; preview() } draw() } });
+    $$("[data-up]",L).forEach(function(x){ x.onclick=function(){ move(+x.dataset.up, +x.dataset.up-1) } });
+    $$("[data-down]",L).forEach(function(x){ x.onclick=function(){ move(+x.dataset.down, +x.dataset.down+1) } });
+    $$("[data-dup]",L).forEach(function(x){ x.onclick=function(){ var i=+x.dataset.dup, cp=JSON.parse(JSON.stringify(blocks[i])); cp.id=newBlockId(); blocks.splice(i+1,0,cp); openId=cp.id; draw(); changed() } });
+    $$("[data-hide]",L).forEach(function(x){ x.onclick=function(){ var b=blocks[+x.dataset.hide]; b.hidden=!b.hidden; if(!b.hidden) delete b.hidden; draw(); changed() } });
+    $$("[data-del]",L).forEach(function(x){ x.onclick=function(){ var i=+x.dataset.del, hostEl=$('[data-delhost="'+i+'"]',L);
+      hostEl.innerHTML='<div class="confirm"><span>Delete this '+esc(BLOCK_DEFS[blocks[i].type].name.toLowerCase())+' block?</span><button class="btn sm danger" type="button" data-delyes>Delete</button><button class="btn sm ghost" type="button" data-delno>Keep it</button></div>';
+      $("[data-delno]",hostEl).onclick=function(){ hostEl.innerHTML="" };
+      $("[data-delyes]",hostEl).onclick=function(){ var gone=blocks.splice(i,1)[0]; openId=null; draw(); changed();
+        undoToast(function(){ blocks.splice(i,0,gone); openId=gone.id; draw(); changed() }) } } });
+    var b=blocks.filter(function(x){return x.id===openId})[0]; if(!b) return;
+    var card=$(".bcard.open",L);
+    $$("[data-k]",card).forEach(function(el){ el.addEventListener("input", function(){ set(b, el.dataset.k, el.value); refreshHead(card,b); changed() }); el.addEventListener("change", function(){ set(b, el.dataset.k, el.value); refreshHead(card,b); changed() }) });
+    $$("[data-seg]",card).forEach(function(x){ x.onclick=function(){ set(b, x.dataset.seg, x.dataset.v); $$('[data-seg="'+x.dataset.seg+'"]',card).forEach(function(y){ y.setAttribute("aria-pressed", String(y===x)) }); changed() } });
+    $$("[data-rowadd]",card).forEach(function(x){ x.onclick=function(){ var k=x.dataset.rowadd; b[k]=b[k]||[]; b[k].push(k==="buttons"?{label:"",url:"",style:b[k].length?"plain":"primary"}:{}); draw(); changed() } });
+    $$("[data-rowdel]",card).forEach(function(x){ x.onclick=function(){ b[x.dataset.rowdel].splice(+x.dataset.i,1); draw(); changed() } });
+    $$("[data-rowup]",card).forEach(function(x){ x.onclick=function(){ var a=b[x.dataset.rowup], i=+x.dataset.i; if(i<1) return; var t=a[i]; a[i]=a[i-1]; a[i-1]=t; draw(); changed() } });
+    $$("[data-pick]",card).forEach(function(x){ x.onclick=function(){ pickFromLibrary({kind:"image"}).then(function(fs){ if(!fs.length) return; set(b, x.dataset.pick, fs[0].url); if(x.dataset.alt && !get(b,x.dataset.alt) && fs[0].alt) set(b, x.dataset.alt, fs[0].alt); draw(); changed() }) } });
+    $$("[data-unpick]",card).forEach(function(x){ x.onclick=function(){ set(b, x.dataset.unpick, ""); draw(); changed() } });
+    $$("[data-pickmany]",card).forEach(function(x){ x.onclick=function(){ pickFromLibrary({kind:"image", multiple:true}).then(function(fs){ b.items=(b.items||[]).concat(fs.map(function(f){ return {url:f.url, alt:f.alt||""} })).slice(0,10); draw(); changed() }) } });
+    $$("[data-pickvideo]",card).forEach(function(x){ x.onclick=function(){ pickFromLibrary({kind:"video"}).then(function(fs){ if(!fs.length) return; b.url=fs[0].url; draw(); changed() }) } });
+  }
+  function refreshHead(card, b){ var s=$(".btoggle span",card), e=$(".btoggle em",card), need=blockNeeds(b); if(s) s.textContent=(b.hidden?"Hidden · ":"")+(blockSummary(b)||"Empty");
+    if(need){ if(!e){ e=document.createElement("em"); e.className="warnx"; $(".btoggle",card).appendChild(e) } e.textContent=need } else if(e) e.remove() }
+
+  /* ----- drag to reorder (the arrows do the same for keyboards) ----- */
+  var L=$("#blist");
+  L.addEventListener("pointerdown", function(e){ var h=e.target.closest("[data-drag]"); if(!h) return; var li=h.closest(".bcard"); li.setAttribute("draggable","true"); dragFrom=+li.dataset.bi });
+  L.addEventListener("dragstart", function(e){ var li=e.target.closest&&e.target.closest(".bcard"); if(!li||dragFrom<0){ e.preventDefault(); return } li.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain", String(dragFrom)) }catch(x){} });
+  L.addEventListener("dragover", function(e){ if(dragFrom<0) return; e.preventDefault(); var li=e.target.closest(".bcard"); $$(".bcard",L).forEach(function(x){ x.classList.remove("over-top","over-bot") });
+    if(li){ var r=li.getBoundingClientRect(); li.classList.add(e.clientY<r.top+r.height/2?"over-top":"over-bot") } });
+  L.addEventListener("drop", function(e){ if(dragFrom<0) return; e.preventDefault(); var li=e.target.closest(".bcard"); if(!li){ dragFrom=-1; draw(); return }
+    var to=+li.dataset.bi, r=li.getBoundingClientRect(); if(e.clientY>=r.top+r.height/2) to++; if(to>dragFrom) to--; var from=dragFrom; dragFrom=-1; if(from===to) draw(); else move(from,to) });
+  L.addEventListener("dragend", function(){ dragFrom=-1; $$(".bcard",L).forEach(function(x){ x.classList.remove("dragging","over-top","over-bot"); x.setAttribute("draggable","false") }) });
+
+  /* ----- page settings ----- */
+  $("#pTitle").addEventListener("input", function(){ save({title:this.value}); preview() });
+  var ps=$("#pSlug"); if(ps) ps.addEventListener("input", function(){ save({slug:this.value}) });
+  $("#pDesc").addEventListener("input", function(){ meta.description=this.value; changed() });
+  function drawShare(){ var hst=$("#pShare"), u=meta.share_image;
+    hst.innerHTML='<div class="bimgrow">'+(u?'<img src="'+esc(u)+'" alt="">':'<span class="bimgnone">None</span>')+'<div class="actions">'+(S.me.files?'<button type="button" class="btn sm" id="pShareBtn">'+(u?"Change":"Choose")+'</button>':'')+(u?'<button type="button" class="btn sm ghost" id="pShareX">Remove</button>':'')+'</div></div>';
+    var cb=$("#pShareBtn"); if(cb) cb.onclick=function(){ pickFromLibrary({kind:"image"}).then(function(fs){ if(!fs.length) return; meta.share_image=fs[0].url; drawShare(); changed() }) };
+    var xb=$("#pShareX"); if(xb) xb.onclick=function(){ meta.share_image=""; drawShare(); changed() };
+  }
+  drawShare();
+  var un=$("#pUnconvert"); if(un) un.onclick=function(){ save.now(); api("POST","pages/"+p.id+"/unconvert").then(function(r){ toast("Back to the old version"); if(onConverted) onConverted(r.page) }).catch(function(e){ toast(e.message,true) }) };
+  var del=$("#delPage"); if(del) del.onclick=function(){ $("#delConfirm").innerHTML='<div class="confirm"><span>Delete “'+esc(p.title)+'”? This can’t be undone.</span><button class="btn sm danger" type="button" id="delYes">Delete page</button><button class="btn sm ghost" type="button" id="delNo">Keep it</button></div>';
+    $("#delNo").onclick=function(){ $("#delConfirm").innerHTML="" };
+    $("#delYes").onclick=function(){ api("DELETE","pages/"+p.id).then(function(){ toast("Page deleted"); go("#/sites/"+site.id) }).catch(function(e){ toast(e.message,true) }) } };
+
+  $$("[data-pv]").forEach(function(b){ b.onclick=function(){ previewTheme=b.dataset.pv; store("proof.pvtheme",previewTheme); $$("[data-pv]").forEach(function(x){ x.setAttribute("aria-pressed", String(x===b)) }); preview() } });
+  $$("[data-pw]").forEach(function(b){ b.onclick=function(){ $("#pvwrap").classList.toggle("phone", b.dataset.pw==="phone"); $$("[data-pw]").forEach(function(x){ x.setAttribute("aria-pressed", String(x===b)) }) } });
+
+  if(blocks[0] && blocks.length<=2) openId=blocks[0].id;
+  draw(); preview();
+}
+/** A toast with an Undo button for a few seconds. */
+function undoToast(fn){
+  var t=document.createElement("div"); t.className="undo"; t.innerHTML='<span>Deleted.</span><button type="button" class="btn sm">Undo</button>';
+  document.body.appendChild(t); var gone=setTimeout(function(){ t.remove() },7000);
+  $("button",t).onclick=function(){ clearTimeout(gone); t.remove(); fn() };
 }
 
 function sitePages(site, pages, pageId){
-  var body=$("#tabBody"), newTpl="waitlist";
+  var body=$("#tabBody"), newTpl="blocks";
   var sel = pages.filter(function(p){return p.id===pageId})[0] || pages[0];
   function rowsHtml(){
     return '<div class="rows">'+pages.map(function(p){
@@ -307,11 +544,12 @@ function sitePages(site, pages, pageId){
   }
   function editor(){
     var host=$("#editorHost"), p=sel, c={};
-    if(p.template==="blocks"){ blockPagePreview(host, site, p); return }
+    if(p.template==="blocks"){ blockEditor(host, site, p, function(np){ Object.assign(p, np); render(false) }); return }
     try{ c=JSON.parse(p.content||"{}") }catch(e){}
     var previewTheme = store("proof.pvtheme")||"site";
     host.innerHTML='<div class="editor"><form class="form panel" id="edForm" autocomplete="off">'+
       '<h2 class="sec">Edit page <span class="saving" id="edSave">Saved</span></h2>'+
+      (p.template!=="post"?'<div class="notice" style="margin:0 0 4px"><p style="margin:0">Switch this page to blocks to add screenshots, store buttons, an FAQ and more. Its words come with it, and you can switch back.</p><button type="button" class="btn sm" id="toBlocks">Switch to blocks</button></div>':'')+
       '<div class="field"><label for="pTitle">Page name</label><input type="text" id="pTitle" maxlength="80" value="'+esc(p.title)+'"></div>'+
       (p.slug!=="" ? '<div class="field"><label for="pSlug">Address</label><div class="affix"><span>/</span><input type="text" id="pSlug" maxlength="60" value="'+esc(p.slug)+'"></div><span class="hint">Lives at '+esc(hostOf(site))+'/<span id="slugEcho">'+esc(p.slug)+'</span></span></div>' : '<p class="hint">This is the home page at '+esc(hostOf(site))+'.</p>')+
       pageFields(p.template, c, p)+
@@ -320,6 +558,7 @@ function sitePages(site, pages, pageId){
       '<div class="seg" role="group" aria-label="Preview theme"><button type="button" data-pv="site" aria-pressed="'+(previewTheme==="site")+'">Site</button><button type="button" data-pv="light" aria-pressed="'+(previewTheme==="light")+'">Light</button><button type="button" data-pv="dark" aria-pressed="'+(previewTheme==="dark")+'">Dark</button></div></div>'+
       '<iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
     imageButton($("#pcBody"), $("#pcBody").nextElementSibling);
+    var tb=$("#toBlocks"); if(tb) tb.onclick=function(){ tb.disabled=true; api("POST","pages/"+p.id+"/convert").then(function(r){ Object.assign(p, r.page); toast("Switched to blocks"); render(false) }).catch(function(e){ tb.disabled=false; toast(e.message,true) }) };
     var save = saver($("#edSave"), function(data){
       return api("PATCH","pages/"+p.id,data).then(function(r){ p.title=r.page.title; p.slug=r.page.slug; p.content=r.page.content;
         var sl=$("#pSlug"); if(sl && document.activeElement!==sl && sl.value!==r.page.slug){ sl.value=r.page.slug }
