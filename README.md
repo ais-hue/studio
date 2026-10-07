@@ -6,6 +6,10 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 - `admin/` – the studio app (served at studio.aisling.online) plus the public site stylesheet and fonts
 - `migrations/` – the database schema. The worker applies it itself on first run; after editing, run `node scripts/schema.mjs` to rebuild `src/schema.ts`.
 
+## Block pages
+
+A page with template `blocks` is an ordered list of blocks (`src/blocks.ts`): hero, text, image, gallery, store buttons, features, quote, FAQ, signup, links, video and divider. Each has a background (page, soft, accent), spacing and a hidden switch; colours and type come from the site, so pages stay readable in light and dark and on phones. `cleanBlocks()` validates everything that is saved. Store buttons get tracked links when a page is saved (`source_type = 'page'`). Old template pages render as before; `POST /api/pages/<id>/convert` turns one into blocks and keeps the old version for `/unconvert`.
+
 ## How email flows
 
 - **Sign-ups** land on the site's list. With double opt-in on (Settings), they wait as "pending" until they tap the link sent to `go.<domain>/confirm/…`.

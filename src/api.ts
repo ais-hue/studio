@@ -1,5 +1,6 @@
 import { ACCENTS, Env, HttpError, PRIVATE_SETTINGS, RESERVED_SUBDOMAINS, getSettings, id, isEmail, json, now, slugify } from "./util";
-import { Content, Page, Site, renderPage } from "./render";
+import { Content, Page, Site, parseContent, renderPage } from "./render";
+import { cleanBlocks, fromTemplate, trackStoreLinks } from "./blocks";
 import { defaultWelcome, siteList, upsertContact } from "./public";
 import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sendTest } from "./email";
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
@@ -185,12 +186,16 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (!b && m === "POST") {
       const d = await body(req);
       const site = await getSite(env, str(d.site_id));
-      const template = TEMPLATES.includes(d.template) ? d.template : "waitlist";
+      const template = d.template === "blocks" ? "blocks" : TEMPLATES.includes(d.template) ? d.template : "waitlist";
       const title = str(d.title, 80) || "Untitled";
       const slug = await uniqueSlug(env, site.id, d.slug || title);
-      const content = defaultContent(template, site.name, `${site.subdomain}.${env.ROOT_DOMAIN}`);
+      // A block page starts from one of the old templates' layouts (d.starter), or from whatever blocks were sent.
+      const starter = TEMPLATES.includes(d.starter) && d.starter !== "post" ? d.starter : "launch";
+      let content: any = defaultContent(template === "blocks" ? starter : template, site.name, `${site.subdomain}.${env.ROOT_DOMAIN}`);
       if (template === "post") content.headline = title;
+      if (template === "blocks") content = d.content?.blocks ? cleanBlocks(d.content) : fromTemplate(starter, { ...content, headline: title }, title);
       const pid = id("pg_");
+      if (template === "blocks") content = await trackStoreLinks(env, { id: pid, slug }, site, content);
       await env.DB.prepare("INSERT INTO pages (id, site_id, slug, title, template, content, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)")
         .bind(pid, site.id, slug, title, template, JSON.stringify(content), t, t).run();
       return json({ page: await getPage(env, pid) }, 201);
@@ -201,13 +206,35 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const title = d.title !== undefined ? str(d.title, 80) || p.title : p.title;
       let slug = p.slug;
       if (d.slug !== undefined && p.slug !== "") slug = await uniqueSlug(env, p.site_id, d.slug || title, p.id);
-      const content = d.content !== undefined ? JSON.stringify(d.content).slice(0, 100_000) : p.content;
+      let content = d.content !== undefined ? JSON.stringify(d.content).slice(0, 100_000) : p.content;
+      if (p.template === "blocks" && d.content !== undefined) {
+        const clean = cleanBlocks(d.content);
+        content = JSON.stringify(await trackStoreLinks(env, { id: p.id, slug }, await getSite(env, p.site_id), clean));
+        if (content.length > 200_000) throw new HttpError(400, "This page is too long to save. Split it into two pages.");
+      }
       const published = d.published !== undefined ? (d.published ? 1 : 0) : p.published;
       await env.DB.prepare("UPDATE pages SET title = ?, slug = ?, content = ?, published = ?, updated_at = ? WHERE id = ?")
         .bind(title, slug, content, published, t, p.id).run();
       return json({ page: await getPage(env, p.id) });
     }
-    if (b && m === "DELETE") {
+    /* Turn an old-template page into blocks. Its content is kept; the old version is kept too, for undo. */
+    if (b && c === "convert" && m === "POST") {
+      const p = await getPage(env, b);
+      if (p.template === "blocks") return json({ page: p });
+      if (p.template === "post") throw new HttpError(400, "Journal posts stay as they are for now. They become a collection later.");
+      const content = await trackStoreLinks(env, p, await getSite(env, p.site_id), fromTemplate(p.template, parseContent(p) as any, p.title));
+      await env.DB.prepare("UPDATE pages SET template = 'blocks', content = ?, previous = ?, updated_at = ? WHERE id = ?")
+        .bind(JSON.stringify(content), JSON.stringify({ template: p.template, content: p.content }), t, p.id).run();
+      return json({ page: await getPage(env, p.id) });
+    }
+    if (b && c === "unconvert" && m === "POST") {
+      const p = await getPage(env, b) as Page & { previous?: string | null };
+      const prev = (() => { try { return JSON.parse(p.previous || ""); } catch { return null; } })();
+      if (!prev?.template) throw new HttpError(400, "There’s no earlier version of this page to go back to.");
+      await env.DB.prepare("UPDATE pages SET template = ?, content = ?, previous = NULL, updated_at = ? WHERE id = ?").bind(prev.template, prev.content, t, p.id).run();
+      return json({ page: await getPage(env, p.id) });
+    }
+    if (b && !c && m === "DELETE") {
       const p = await getPage(env, b);
       if (p.slug === "") throw new HttpError(400, "The home page can’t be deleted. Switch it off instead.");
       await env.DB.prepare("DELETE FROM pages WHERE id = ?").bind(b).run();
@@ -226,7 +253,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     const settings = await getSettings(env);
     const hasBlog = !!(await env.DB.prepare("SELECT 1 FROM pages WHERE site_id = ? AND template = 'post' AND published = 1").bind(site.id).first());
     const pform = pg.content?.form_id ? await loadForm(env, String(pg.content.form_id)) : null;
-    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
+    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
       { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 

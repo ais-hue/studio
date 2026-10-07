@@ -1,5 +1,6 @@
 import { formCss, renderFields } from "./forms";
 import { accentOf, esc, markdown } from "./util";
+import { BlocksContent, parseBlocks, renderBlocks } from "./blocks";
 
 export interface Site {
   id: string; name: string; subdomain: string; accent: string; theme: string; status: string; tagline: string;
@@ -24,12 +25,13 @@ export interface RenderOpts {
   hasBlog: boolean;
   joined?: boolean | "confirm";
   form?: import("./forms").PublicForm | null;  // a custom form chosen for this page
+  root?: string;          // ROOT_DOMAIN: tracked links and resized images on block pages
 }
 
 const fmtDate = (ms: number) =>
   new Date(ms).toLocaleDateString("en-IE", { day: "numeric", month: "long", year: "numeric" });
 
-function shell(site: Site, title: string, desc: string, body: string, o: RenderOpts, bodyClass = "", current = ""): string {
+function shell(site: Site, title: string, desc: string, body: string, o: RenderOpts, bodyClass = "", current = "", image = ""): string {
   const [light, dark] = accentOf(site.accent);
   const theme = ["light", "dark"].includes(site.theme) ? site.theme : "auto";
   const nav = `<header class="nav"><a class="mark" href="/"><i aria-hidden="true"></i>${esc(site.name)}</a>${
@@ -41,6 +43,7 @@ function shell(site: Site, title: string, desc: string, body: string, o: RenderO
 <title>${esc(title)}</title>
 ${desc ? `<meta name="description" content="${esc(desc)}"><meta property="og:description" content="${esc(desc)}">` : ""}
 <meta property="og:title" content="${esc(title)}">
+${image ? `<meta property="og:image" content="${esc(image)}"><meta name="twitter:card" content="summary_large_image">` : ""}
 ${o.preview ? `<meta name="robots" content="noindex">` : ""}
 <link rel="preload" href="/__proof/fonts/archivo-wdth.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/__proof/fonts/fonts.css">
@@ -107,6 +110,7 @@ function safeUrl(u: string): string {
 }
 
 export function renderPage(site: Site, page: Page, o: RenderOpts): string {
+  if (page.template === "blocks") return renderBlockPage(site, page, parseBlocks(page), o);
   const c = parseContent(page);
   const headline = c.headline || page.title;
   const desc = c.description || c.sub || site.tagline || "";
@@ -138,6 +142,19 @@ ${c.form === false ? "" : `<section class="post-end"><h2>${esc(c.eyebrow || "Get
   return shell(site, title, desc, `<div class="eyebrow">${esc(eyebrow)}</div>
 <h1>${esc(headline)}</h1>${c.sub ? `<p class="sub">${esc(c.sub)}</p>` : ""}
 ${signup(page, c, o)}${points}${body}`, o, "", page.slug ? "" : "home");
+}
+
+function renderBlockPage(site: Site, page: Page, content: BlocksContent, o: RenderOpts): string {
+  const title = page.slug ? `${page.title} · ${site.name}` : site.name + (site.tagline ? ` · ${site.tagline}` : "");
+  const hero = content.blocks.find((b) => b.type === "hero" && !b.hidden);
+  const desc = content.description || hero?.sub || site.tagline || "";
+  const root = o.root || o.host.split(".").slice(-2).join(".");
+  const body = renderBlocks(content, {
+    root, title: page.title, firstHeading: !hero,
+    // Each signup block uses the page's chosen form when it asked for it, and the standard name and email form otherwise.
+    signup: (b) => signup(page, { cta: b.cta || "", form: true }, { ...o, form: b.form_id && o.form?.id === b.form_id ? o.form : null }),
+  });
+  return shell(site, title, desc, body, o, "blocks-page", page.slug ? "" : "home", content.share_image || hero?.image?.url || "");
 }
 
 export function renderBlog(site: Site, posts: Page[], o: RenderOpts): string {
