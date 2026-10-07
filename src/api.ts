@@ -253,7 +253,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     const settings = await getSettings(env);
     const hasBlog = !!(await env.DB.prepare("SELECT 1 FROM pages WHERE site_id = ? AND template = 'post' AND published = 1").bind(site.id).first());
     const pform = pg.content?.form_id ? await loadForm(env, String(pg.content.form_id)) : null;
-    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
+    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
       { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 

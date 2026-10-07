@@ -231,7 +231,7 @@ export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext
   if (p === "/robots.txt") return new Response("User-agent: *\nAllow: /\n", { headers: { "content-type": "text/plain" } });
 
   const settings = await getSettings(env);
-  const base: RenderOpts = { host, root: env.ROOT_DOMAIN, consentText: settings.consent_text, hasBlog: false };
+  const base: RenderOpts = { host, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", consentText: settings.consent_text, hasBlog: false };
 
   if (sub === "go") return handleGo(req, env, ctx, url, base);
   if (p === "/__proof/subscribe" && req.method === "POST") return subscribe(req, env, ctx, host);

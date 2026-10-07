@@ -140,6 +140,7 @@ export function fromTemplate(template: string, c: Content & { form_id?: string }
 
 export interface BlockRender {
   root: string;                         // ROOT_DOMAIN, for tracked links and resized images
+  resize?: boolean;                     // Cloudflare image transformations are switched on (IMAGE_TRANSFORMS=1)
   signup: (b: Block) => string;         // the page's existing signup form, so double opt-in and credit keep working
   firstHeading: boolean;                // true when this page has no hero, so the title needs an h1 of its own
   title: string;
@@ -150,11 +151,15 @@ export function youtubeId(u: string): string {
   return m ? m[1] : "";
 }
 
-/** Studio's own images are resized on the fly; anything else is used as is. */
+/**
+ * Studio's own images are resized on the fly when Cloudflare's image transformations are on for the zone
+ * (Images → Transformations, then set IMAGE_TRANSFORMS=1). Without them the /cdn-cgi/image/ URLs 404, so the
+ * original file is used instead.
+ */
 function img(r: BlockRender, url: string, alt: string, sizes: string, cls = "", eager = false): string {
   const own = `https://files.${r.root}/`;
   const attrs = `alt="${esc(alt)}"${cls ? ` class="${cls}"` : ""} ${eager ? `fetchpriority="high"` : `loading="lazy"`} decoding="async"`;
-  if (!url.startsWith(own)) return `<img src="${esc(url)}" ${attrs}>`;
+  if (!r.resize || !url.startsWith(own)) return `<img src="${esc(url)}" ${attrs}>`;
   const path = url.slice(own.length);
   const at = (w: number) => `${own}cdn-cgi/image/width=${w},quality=82,format=auto/${path}`;
   return `<img src="${esc(at(1200))}" srcset="${[480, 800, 1200, 1800].map((w) => `${esc(at(w))} ${w}w`).join(", ")}" sizes="${sizes}" ${attrs}>`;
