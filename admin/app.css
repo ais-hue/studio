@@ -385,8 +385,8 @@ fieldset.xtra legend{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-
 @media (max-width:760px){.fdetail{grid-template-columns:1fr}}
 .fbig{background:var(--soft);border:1px solid var(--line);display:grid;place-items:center;min-height:160px}
 .fbig img,.fbig video{max-width:100%;max-height:360px;display:block}
-.modal{position:fixed;inset:0;background:rgba(11,18,32,.55);z-index:40;display:grid;place-items:center;padding:16px}
-.modalbox{background:var(--bg);border:1px solid var(--line2);width:min(860px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column}
+.modal{position:fixed;inset:0;background:rgba(11,18,32,.55);z-index:40;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;padding:16px}
+.modalbox{min-width:0;background:var(--bg);border:1px solid var(--line2);width:min(860px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column}
 .modalhead,.modalfoot{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
 .modalfoot{border-bottom:0;border-top:1px solid var(--line)}
 .modalhead b{font-size:15px}
@@ -523,8 +523,8 @@ p.camppick{color:var(--t3)}
 
 /* bulk scheduling */
 .sechd{display:flex;align-items:center;gap:10px}
-.pk{display:flex;align-items:center;cursor:pointer;padding:4px;margin:-4px}
-.pk input{width:16px;height:16px;margin:0;accent-color:var(--coral);cursor:pointer}
+label.pk{display:flex;align-items:center;cursor:pointer;padding:4px;margin:-4px}
+label.pk input{width:16px;height:16px;margin:0;accent-color:var(--coral);cursor:pointer}
 .rowi.pickrow{grid-template-columns:auto minmax(0,1fr) auto}
 .rowi .t{color:var(--t1);text-decoration:none}
 a.t:hover{text-decoration:underline}
