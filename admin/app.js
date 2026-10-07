@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610080005";
+var VERSION = "202610080015";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -809,7 +809,7 @@ function segmentEditor(host, ctx, seg, onSave, onCancel){
 function emailsView(){
   return api("GET","campaigns").then(function(d){
     var v=$("#view");
-    var html=head("Marketing", "Emails", "Campaigns to your lists. Welcome emails live on each site.", '<button class="btn primary" type="button" id="newEmail">New email</button>')+emailBanner();
+    var html=head("Publish", "Emails", "Campaigns to your lists. Welcome emails live on each site.", '<button class="btn primary" type="button" id="newEmail">New email</button>')+emailBanner();
     if(!d.campaigns.length) html+='<div class="empty"><b>No emails yet</b>Write one and send it to a list, or to everyone.</div>';
     else html+='<div class="tablewrap"><table><thead><tr><th>Email</th><th>To</th><th>Status</th><th class="r">Sent</th><th class="r">Opened</th><th class="r">Clicked</th></tr></thead><tbody>'+
       d.campaigns.map(function(c){ var s=c.stats||{};
@@ -927,7 +927,7 @@ function triggerText(q){
 function automationsView(){
   return api("GET","sequences").then(function(d){
     var v=$("#view");
-    var html=head("Marketing","Automations","Emails that send themselves when someone signs up or clicks, spaced out over days.",'<button class="btn primary" type="button" id="newAuto">New automation</button>')+emailBanner();
+    var html=head("Publish","Automations","Emails that send themselves when someone signs up or clicks, spaced out over days.",'<button class="btn primary" type="button" id="newAuto">New automation</button>')+emailBanner();
     if(!d.sequences.length){
       html+='<div class="empty"><b>No automations yet</b>A good first one: when someone joins a waitlist, send a welcome now, a behind-the-scenes email in 3 days, and a nudge a week later.</div>';
     } else {
@@ -1681,7 +1681,7 @@ function socialView(brandParam){
   return loadSocialMeta().then(function(meta){
     var v=$("#view");
     if(!meta.connected){
-      v.innerHTML=head("Marketing","Social","Write once, post to every account, now or on a schedule.")+
+      v.innerHTML=head("Publish","Social","Write once, post to every account, now or on a schedule.")+
         '<div class="panel"><div class="pad stack" style="gap:12px"><p style="margin:0"><b>Connect Zernio to start.</b> Zernio is the service that does the posting. You link each account once with the normal “log in with Instagram” screen, all from here.</p>'+
         '<p class="hint" style="margin:0">Your first 2 accounts are free, then it’s $6 a month per account. X charges a few cents per post on top.</p>'+
         '<div class="actions"><a class="btn primary" href="#/settings">Add your Zernio key in Settings</a></div></div></div>';
@@ -1695,7 +1695,7 @@ function socialView(brandParam){
       if(q.get("error")) toast("That didn’t connect: "+(q.get("error_message")||q.get("error")), true);
       if(q.toString()) history.replaceState(null,"","#/social"+(brand?"/b/"+brand._id:""));
       if(!brand){
-        v.innerHTML=head("Marketing","Social","Write once, post to every account, now or on a schedule.")+'<form class="sheet" id="brandForm"><h3>Add your first brand</h3><p class="hint" style="margin:0">A brand holds one account per platform, like Ciúnas’s Instagram, TikTok and LinkedIn.</p><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Ciúnas"></div><div class="actions"><button class="btn primary" type="submit">Create brand</button></div></form>';
+        v.innerHTML=head("Publish","Social","Write once, post to every account, now or on a schedule.")+'<form class="sheet" id="brandForm"><h3>Add your first brand</h3><p class="hint" style="margin:0">A brand holds one account per platform, like Ciúnas’s Instagram, TikTok and LinkedIn.</p><div class="field"><label for="bName">Brand name</label><input type="text" id="bName" required maxlength="60" placeholder="e.g. Ciúnas"></div><div class="actions"><button class="btn primary" type="submit">Create brand</button></div></form>';
         $("#brandForm").onsubmit=function(e){ e.preventDefault(); api("POST","social/brands",{name:$("#bName").value}).then(function(r){ store("studio.brand",r.brand._id); go("#/social/b/"+r.brand._id) }).catch(function(e){ toast(e.message,true) }) };
         return;
       }
@@ -1703,7 +1703,7 @@ function socialView(brandParam){
       return Promise.all([api("GET","social/brands/"+brand._id+"/accounts"), api("GET","social/posts?brand="+encodeURIComponent(brand._id))]).then(function(r){
         var accounts=r[0].accounts, posts=r[1].posts;
         var byPlat={}; accounts.forEach(function(a){ byPlat[a.platform]=a });
-        var html=head("Marketing","Social","Write once, post to every account, now or on a schedule.",'<button class="btn" type="button" id="importBtn"'+(accounts.length?'':' disabled')+'>Import posts</button><button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>')+'<div id="importHost"></div>';
+        var html=head("Publish","Social","Write once, post to every account, now or on a schedule.",'<button class="btn" type="button" id="importBtn"'+(accounts.length?'':' disabled')+'>Import posts</button><button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>')+'<div id="importHost"></div>';
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
         html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="briefBtn">Brief for Claude</button><button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
         html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. Set up Studio’s own platform apps in <a href="#/settings">Settings</a>.</span></h2><div class="plats">'+
@@ -1981,7 +1981,7 @@ function campaignPicker(host, kind, itemId, current){
 function campaignsView(){
   return api("GET","initiatives?all=1").then(function(d){
     var v=$("#view"), list=d.campaigns;
-    var html=head("Marketing","Campaigns","A launch or a push: its emails, posts, forms and pages together, and what they added up to.",'<button class="btn primary" type="button" id="newCamp">New campaign</button>');
+    var html=head("Plan","Campaigns","A launch or a push: its emails, posts, forms and pages together, and what they added up to.",'<button class="btn primary" type="button" id="newCamp">New campaign</button>');
     html+='<div id="ncHost"></div>';
     if(!list.length) html+='<div class="empty"><b>No campaigns yet</b>Make one for your next launch, like “Cipherly autumn”, then add the emails and posts for it. Studio adds up the clicks and sign-ups.</div>';
     var groups=[["Live",function(c){return c.phase==="live"}],["Planning",function(c){return c.phase==="planning"}],["Finished",function(c){return c.phase==="done"}],["Archived",function(c){return c.phase==="archived"}]];
@@ -2101,7 +2101,7 @@ function reviewView(){
     var v=$("#view"), posts=d.posts, byBatch={};
     posts.forEach(function(p){ var k=p.batch_id||"_"; (byBatch[k]=byBatch[k]||[]).push(p) });
     var ready=posts.filter(function(p){ return !p.problems.length });
-    var html=head("Marketing","Review","Posts Claude drafted for you. Nothing goes out until you approve it.",
+    var html=head("Publish","Review","Posts Claude drafted for you. Nothing goes out until you approve it.",
       ready.length?'<button class="btn primary" type="button" id="rvAll">'+allLabel()+'</button>':'');
     function allLabel(){ return ready.length===1?"Approve the 1 ready post":"Approve all "+ready.length+" ready" }
     html+='<div id="rvConfirm"></div>';
