@@ -413,7 +413,9 @@ export interface BulkEdit {
   tags_add?: string[]; tags_remove?: string[];
   platforms_add?: string[]; platforms_remove?: string[];
   pinterest_link?: string; pinterest_board?: string;
+  tiktok_privacy?: string; tiktok_consent?: boolean;  // only touches posts that go to TikTok
 }
+const TIKTOK_PRIVACY = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"];
 
 const tagRe = (t: string) => new RegExp(`(^|[\\s(])#${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w\\u00C0-\\u024F])`, "giu");
 const cleanTag = (x: unknown) => String(x ?? "").trim().replace(/^#+/, "").replace(/[^\p{L}\p{N}_]/gu, "").slice(0, 60);
@@ -428,10 +430,12 @@ export function cleanEdit(d: any): BulkEdit {
     platforms_add: list(d?.platforms_add, (x) => String(x).trim().toLowerCase()).filter((p) => PLATFORMS[p]),
     platforms_remove: list(d?.platforms_remove, (x) => String(x).trim().toLowerCase()).filter((p) => PLATFORMS[p]),
     pinterest_link: s(d?.pinterest_link, 1000)?.trim(), pinterest_board: s(d?.pinterest_board, 80)?.trim(),
+    tiktok_privacy: TIKTOK_PRIVACY.includes(String(d?.tiktok_privacy || "")) ? String(d.tiktok_privacy) : undefined,
+    tiktok_consent: d?.tiktok_consent === true || undefined,
   };
   if (!e.find) { e.find = undefined; e.replace = undefined; }
   if (e.pinterest_link && !/^https:\/\//.test(e.pinterest_link)) throw new HttpError(400, "The Pinterest link needs to start with https://");
-  const any = e.find || e.start || e.end || e.tags_add!.length || e.tags_remove!.length || e.platforms_add!.length || e.platforms_remove!.length || e.pinterest_link !== undefined || e.pinterest_board;
+  const any = e.find || e.start || e.end || e.tags_add!.length || e.tags_remove!.length || e.platforms_add!.length || e.platforms_remove!.length || e.pinterest_link !== undefined || e.pinterest_board || e.tiktok_privacy || e.tiktok_consent;
   if (!any) throw new HttpError(400, "Say what to change first.");
   return e;
 }
@@ -490,6 +494,11 @@ export function applyEdit(p: SocialPost, e: BulkEdit, accounts: SocialAccount[],
       if (e.pinterest_link !== undefined) { if (e.pinterest_link) opts.pinterest.link = e.pinterest_link; else delete opts.pinterest.link; }
       if (e.pinterest_board) opts.pinterest.boardId = e.pinterest_board;
     }
+  }
+  if ((e.tiktok_privacy || e.tiktok_consent) && targets.some((t) => t.platform === "tiktok")) {
+    opts.tiktok = { ...(opts.tiktok || {}) };
+    if (e.tiktok_privacy) opts.tiktok.privacy_level = e.tiktok_privacy;
+    if (e.tiktok_consent) opts.tiktok.consent = true;
   }
   return { content, targets: JSON.stringify(targets), options: JSON.stringify(opts), notes };
 }

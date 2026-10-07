@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610072345";
+var VERSION = "202610080005";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1512,7 +1512,7 @@ function bulkEdit(host, sel, brand, accounts, done){
   var n=sel.length, ids=sel.map(function(p){return p.id}), sched=sel.filter(function(p){return p.status==="scheduled"}).length;
   var inUse={}; sel.forEach(function(p){ p.targets.forEach(function(t){ inUse[t.platform]=1 }) });
   var connected=accounts.map(function(a){return a.platform});
-  var pin=accounts.filter(function(a){return a.platform==="pinterest"})[0];
+  var pin=accounts.filter(function(a){return a.platform==="pinterest"})[0], tk=accounts.filter(function(a){return a.platform==="tiktok"})[0];
   var box=function(attr, p){ return '<label class="check"><input type="checkbox" '+attr+'="'+p+'"> '+esc(platName(p))+'</label>' };
   host.innerHTML='<div class="sheet bkedit"><h3>Edit '+n+' post'+(n===1?"":"s")+'</h3>'+
     (sched?'<p class="hint" style="margin:0">'+sched+' of these '+(sched===1?"is":"are")+' scheduled. '+(sched===1?"It’s":"They’re")+' pulled back, changed and put back at the same time.</p>':'')+
@@ -1526,9 +1526,15 @@ function bulkEdit(host, sel, brand, accounts, done){
       '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">Stop posting to</legend>'+(Object.keys(inUse).map(function(p){ return box("data-pr",p) }).join("")||'<span class="hint">None picked yet.</span>')+'</fieldset></div>'+
     ((pin||inUse.pinterest)?'<div class="fieldrow"><div class="field"><label for="bePinLink">Pinterest link</label><input type="text" id="bePinLink" placeholder="https://apps.apple.com/…"><span class="hint">Where a tap on the pin goes. Only changes posts that go to Pinterest.</span></div>'+
       '<div class="field"><label for="bePinBoard">Pinterest board</label><select id="bePinBoard"><option value="">Leave as it is</option></select></div></div>':'')+
+    ((tk||inUse.tiktok)?'<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">TikTok</legend><div class="fieldrow"><div class="field"><label for="beTkPriv">Who can see it</label><select id="beTkPriv"><option value="">Leave as it is</option></select></div></div>'+
+      '<label class="check"><input type="checkbox" id="beTkOk"> By posting, I agree to TikTok’s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a> for each of these posts.</label>'+
+      '<span class="hint">Only changes posts that go to TikTok. Posts marked as promoting your brand also fall under TikTok’s <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a>.</span></fieldset>':'')+
     '<div class="actions"><button class="btn sm primary" type="button" id="beGo">Preview changes</button><button class="btn sm ghost" type="button" id="beN">Cancel</button></div><div id="bePrev"></div></div>';
   $("#beN").onclick=function(){ host.innerHTML="" };
   if(pin) api("GET","social/accounts/"+pin._id+"/boards").then(function(d){ var s=$("#bePinBoard"); if(!s) return; s.innerHTML='<option value="">Leave as it is</option>'+d.boards.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>' }).join("") }).catch(function(){});
+  if(tk) api("GET","social/accounts/"+tk._id+"/tiktok").then(function(d){ var s=$("#beTkPriv"); if(!s) return;
+    var labels={PUBLIC_TO_EVERYONE:"Everyone",MUTUAL_FOLLOW_FRIENDS:"Friends (people who follow each other)",FOLLOWER_OF_CREATOR:"Followers",SELF_ONLY:"Only me"};
+    s.innerHTML='<option value="">Leave as it is</option>'+d.info.privacy.map(function(x){ return '<option value="'+esc(x)+'">'+esc(labels[x]||d.info.labels[x]||x)+'</option>' }).join("") }).catch(function(){ var s=$("#beTkPriv"); if(s) s.innerHTML='<option value="">Couldn’t load TikTok’s options</option>' });
   function read(){
     var v=function(k){ var el=$("#"+k); return el?el.value:"" };
     var tags=function(k){ return v(k).split(/[\s,]+/).map(function(x){return x.replace(/^#+/,"").trim()}).filter(Boolean) };
@@ -1536,6 +1542,8 @@ function bulkEdit(host, sel, brand, accounts, done){
       platforms_add:$$("[data-pa]:checked").map(function(x){return x.dataset.pa}), platforms_remove:$$("[data-pr]:checked").map(function(x){return x.dataset.pr})};
     if(v("bePinLink").trim()) e.pinterest_link=v("bePinLink").trim();
     if(v("bePinBoard")) e.pinterest_board=v("bePinBoard");
+    if(v("beTkPriv")) e.tiktok_privacy=v("beTkPriv");
+    if($("#beTkOk")&&$("#beTkOk").checked) e.tiktok_consent=true;
     return e;
   }
   var lastEdit=null;
@@ -1561,9 +1569,10 @@ function bulkEdit(host, sel, brand, accounts, done){
       var h='<p class="hint" style="margin:0"><b>'+ch.length+'</b> will change'+(same.length?', '+same.length+' already match':'')+(bad.length?', '+bad.length+' can’t be changed':'')+'.</p><div class="bediffs">';
       h+=ch.map(function(r){
         var pl=r.platforms_before.join(",")!==r.platforms_after.join(",") ? '<span class="sub">Platforms: '+esc(r.platforms_before.map(platName).join(", ")||"none")+' → '+esc(r.platforms_after.map(platName).join(", ")||"none")+'</span>' : '';
-        var warn=(r.notes||[]).concat(r.status==="scheduled"&&r.problems.length?["Will go back to drafts: "+r.problems[0]]:[]);
+        var warn=(r.notes||[]).concat(r.status==="scheduled"&&r.problems.length?["Will go back to drafts: "+r.problems[0]]:[]).concat(r.status==="draft"&&r.problems.length?["Still needs: "+r.problems.join(" ")]:[]);
+        var ok=r.status==="draft"&&!r.problems.length?'<span class="sub" style="color:var(--good)">Nothing else needed. Ready to approve or schedule.</span>':'';
         return '<div class="bediff"><div class="bdh"><b>'+(r.at?esc(fmtDate(r.at,true)):"Draft")+'</b> '+socialChip(r.status)+'</div>'+pl+(r.before!==r.after?'<pre class="dlines">'+lineDiff(r.before,r.after)+'</pre>':'<span class="sub">Caption unchanged.</span>')+
-          (warn.length?'<span class="sub warnx">'+esc(warn.join(" "))+'</span>':'')+'</div>' }).join("");
+          (warn.length?'<span class="sub warnx">'+esc(warn.join(" "))+'</span>':ok)+'</div>' }).join("");
       h+=bad.map(function(r){ var p=sel.filter(function(x){return x.id===r.id})[0]; return '<div class="bediff"><span class="sub warnx"><b>'+esc(((p&&p.content)||"").split("\n")[0].slice(0,50)||"Post")+'</b>: '+esc(r.error)+'</span></div>' }).join("")+'</div>';
       $("#bePrev").innerHTML=h; $("#bePrev").scrollIntoView({block:"nearest"});
       if(ch.length){ lastEdit=e; btn.textContent="Save changes to "+ch.length } else btn.textContent="Preview changes";
