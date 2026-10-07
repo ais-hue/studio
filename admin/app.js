@@ -18,7 +18,7 @@ var TEMPLATES = {
 };
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610011811";
+var VERSION = "202610072345";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -1419,7 +1419,7 @@ function bulkResult(r, verb){
   if(r.done.length) toast(r.done.length+" post"+(r.done.length===1?"":"s")+" "+verb);
   if(r.failed.length) toast(r.failed.length+" couldn’t be "+verb+": "+r.failed[0].error, true);
 }
-function bulkSetup(posts, brand){
+function bulkSetup(posts, brand, accounts){
   var bar=$("#bulkBar"); if(!bar) return;
   var byId={}; posts.forEach(function(p){ byId[p.id]=p });
   function picked(){ return $$("[data-sel]:checked").map(function(x){ return byId[x.dataset.sel] }).filter(Boolean) }
@@ -1432,6 +1432,7 @@ function bulkSetup(posts, brand){
     var h='<span class="bn"><b>'+sel.length+'</b> selected</span>';
     if(drafts.length===sel.length) h+='<button class="btn sm primary" type="button" data-bk="queue">Add to queue</button><button class="btn sm" type="button" data-bk="spread">Spread out…</button><button class="btn sm" type="button" data-bk="same">Same time…</button>';
     if(sched.length===sel.length) h+='<button class="btn sm" type="button" data-bk="unschedule">Unschedule</button>';
+    h+='<button class="btn sm" type="button" data-bk="edit">Edit…</button>';
     h+='<button class="btn sm danger" type="button" data-bk="delete">Delete</button><button class="btn sm ghost" type="button" data-bk="clear">Clear</button>';
     if(drafts.length&&sched.length) h+='<span class="hint">Pick only drafts to schedule, or only scheduled posts to pull back.</span>';
     else if(blocked) h+='<span class="hint">'+blocked+' still need'+(blocked===1?"s":"")+' something and will be skipped.</span>';
@@ -1447,6 +1448,7 @@ function bulkSetup(posts, brand){
     if(kind==="queue") confirmIn("Put "+n+" post"+s+" into "+esc(brand.name)+"’s next free posting times, in the order shown?", "Queue "+n, function(){ runBulk("queue", ids).then(function(r){ finish(r,"queued") }).catch(function(e){ toast(e.message,true) }) });
     if(kind==="unschedule") confirmIn("Pull "+n+" post"+s+" back to drafts? They won’t go out.", "Unschedule "+n, function(){ runBulk("unschedule", ids).then(function(r){ finish(r,"pulled back") }).catch(function(e){ toast(e.message,true) }) });
     if(kind==="delete") confirmIn("Delete "+n+" post"+s+" from Studio? Scheduled ones won’t go out. Posts already up stay on the platforms.", "Delete "+n, function(){ runBulk("delete", ids).then(function(r){ finish(r,"deleted") }).catch(function(e){ toast(e.message,true) }) }, true);
+    if(kind==="edit"){ bulkEdit(more, sel, brand, accounts||[], function(){ route() }); return }
     if(kind==="same"){
       more.innerHTML='<div class="sheet"><div class="actions"><label for="bkAt">Post all '+n+' at</label><input type="datetime-local" id="bkAt" style="width:auto"><button class="btn sm primary" type="button" id="bkGo">Schedule '+n+'</button><button class="btn sm ghost" type="button" id="bkN">Cancel</button></div></div>';
       $("#bkN").onclick=function(){ more.innerHTML="" };
@@ -1484,6 +1486,90 @@ function bulkSetup(posts, brand){
   $$("[data-sel]").forEach(function(x){ x.onchange=draw });
   $$("[data-selall]").forEach(function(a){ a.onchange=function(){ var on=a.checked; $$('[data-sel][data-grp="'+a.dataset.selall+'"]').forEach(function(b){ b.checked=on }); draw() } });
   draw();
+}
+
+/* Bulk edit: one set of changes for every selected post, previewed before anything is saved. */
+function lineDiff(a, b){
+  // Line-level diff (LCS) so the preview shows what each post loses and gains.
+  var x=a.split("\n"), y=b.split("\n"), n=x.length, m=y.length, L=[], i, j;
+  for(i=0;i<=n;i++){ L.push(new Array(m+1).fill(0)) }
+  for(i=n-1;i>=0;i--) for(j=m-1;j>=0;j--) L[i][j]= x[i]===y[j] ? L[i+1][j+1]+1 : Math.max(L[i+1][j], L[i][j+1]);
+  var out=[]; i=0; j=0;
+  while(i<n&&j<m){ if(x[i]===y[j]){ out.push([" ",x[i]]); i++; j++ } else if(L[i+1][j]>=L[i][j+1]) out.push(["-",x[i++]]); else out.push(["+",y[j++]]) }
+  while(i<n) out.push(["-",x[i++]]); while(j<m) out.push(["+",y[j++]]);
+  return out.map(function(r){ return '<span class="dl'+(r[0]==="+"?" add":r[0]==="-"?" del":"")+'">'+(r[1]?esc(r[1]):"&nbsp;")+'</span>' }).join("");
+}
+function runEdit(ids, edit, dry, onStep){
+  var results=[], i=0;
+  function next(){
+    if(i>=ids.length) return Promise.resolve(results);
+    var chunk=ids.slice(i,i+10); i+=chunk.length;
+    return api("POST","social/bulk-edit",{ids:chunk, edit:edit, dry:dry}).then(function(r){ results=results.concat(r.results); if(onStep) onStep(results.length, ids.length); return next() });
+  }
+  return next();
+}
+function bulkEdit(host, sel, brand, accounts, done){
+  var n=sel.length, ids=sel.map(function(p){return p.id}), sched=sel.filter(function(p){return p.status==="scheduled"}).length;
+  var inUse={}; sel.forEach(function(p){ p.targets.forEach(function(t){ inUse[t.platform]=1 }) });
+  var connected=accounts.map(function(a){return a.platform});
+  var pin=accounts.filter(function(a){return a.platform==="pinterest"})[0];
+  var box=function(attr, p){ return '<label class="check"><input type="checkbox" '+attr+'="'+p+'"> '+esc(platName(p))+'</label>' };
+  host.innerHTML='<div class="sheet bkedit"><h3>Edit '+n+' post'+(n===1?"":"s")+'</h3>'+
+    (sched?'<p class="hint" style="margin:0">'+sched+' of these '+(sched===1?"is":"are")+' scheduled. '+(sched===1?"It’s":"They’re")+' pulled back, changed and put back at the same time.</p>':'')+
+    '<div class="fieldrow"><div class="field"><label for="beFind">Find</label><input type="text" id="beFind" placeholder="Exact text, e.g. #guessthequote"></div>'+
+      '<div class="field"><label for="beRep">Replace with</label><input type="text" id="beRep" placeholder="Leave empty to remove it"></div></div>'+
+    '<div class="fieldrow"><div class="field"><label for="beStart">Add a line at the start</label><input type="text" id="beStart"></div>'+
+      '<div class="field"><label for="beEnd">Add a line at the end</label><input type="text" id="beEnd" placeholder="e.g. Link in bio."><span class="hint">Goes above the hashtags. Skipped where it’s already there.</span></div></div>'+
+    '<div class="fieldrow"><div class="field"><label for="beTagAdd">Add hashtags</label><input type="text" id="beTagAdd" placeholder="#wordsearch #cozygames"></div>'+
+      '<div class="field"><label for="beTagRm">Remove hashtags</label><input type="text" id="beTagRm" placeholder="#puzzlegame"></div></div>'+
+    '<div class="fieldrow"><fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">Also post to</legend>'+(connected.map(function(p){ return box("data-pa",p) }).join("")||'<span class="hint">No accounts connected.</span>')+'</fieldset>'+
+      '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">Stop posting to</legend>'+(Object.keys(inUse).map(function(p){ return box("data-pr",p) }).join("")||'<span class="hint">None picked yet.</span>')+'</fieldset></div>'+
+    ((pin||inUse.pinterest)?'<div class="fieldrow"><div class="field"><label for="bePinLink">Pinterest link</label><input type="text" id="bePinLink" placeholder="https://apps.apple.com/…"><span class="hint">Where a tap on the pin goes. Only changes posts that go to Pinterest.</span></div>'+
+      '<div class="field"><label for="bePinBoard">Pinterest board</label><select id="bePinBoard"><option value="">Leave as it is</option></select></div></div>':'')+
+    '<div class="actions"><button class="btn sm primary" type="button" id="beGo">Preview changes</button><button class="btn sm ghost" type="button" id="beN">Cancel</button></div><div id="bePrev"></div></div>';
+  $("#beN").onclick=function(){ host.innerHTML="" };
+  if(pin) api("GET","social/accounts/"+pin._id+"/boards").then(function(d){ var s=$("#bePinBoard"); if(!s) return; s.innerHTML='<option value="">Leave as it is</option>'+d.boards.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>' }).join("") }).catch(function(){});
+  function read(){
+    var v=function(k){ var el=$("#"+k); return el?el.value:"" };
+    var tags=function(k){ return v(k).split(/[\s,]+/).map(function(x){return x.replace(/^#+/,"").trim()}).filter(Boolean) };
+    var e={find:v("beFind"), replace:v("beRep"), start:v("beStart"), end:v("beEnd"), tags_add:tags("beTagAdd"), tags_remove:tags("beTagRm"),
+      platforms_add:$$("[data-pa]:checked").map(function(x){return x.dataset.pa}), platforms_remove:$$("[data-pr]:checked").map(function(x){return x.dataset.pr})};
+    if(v("bePinLink").trim()) e.pinterest_link=v("bePinLink").trim();
+    if(v("bePinBoard")) e.pinterest_board=v("bePinBoard");
+    return e;
+  }
+  var lastEdit=null;
+  $$("input,select",host).forEach(function(el){ el.oninput=el.onchange=function(){ if(lastEdit){ lastEdit=null; $("#bePrev").innerHTML=""; $("#beGo").textContent="Preview changes" } } });
+  $("#beGo").onclick=function(){
+    var btn=this, e=read();
+    if(lastEdit){ // second press: save
+      btn.disabled=true; btn.textContent="Saving…";
+      runEdit(ids, lastEdit, false, function(a,b){ btn.textContent="Saving "+a+" of "+b+"…" }).then(function(rs){
+        var saved=rs.filter(function(r){return r.saved}), back=rs.filter(function(r){return r.saved&&r.error}), bad=rs.filter(function(r){return r.skipped});
+        if(saved.length) toast(saved.length+" post"+(saved.length===1?"":"s")+" updated");
+        if(back.length||bad.length){
+          $("#bePrev").innerHTML='<ul class="probs">'+back.concat(bad).map(function(r){ var p=sel.filter(function(x){return x.id===r.id})[0]; return '<li><b>'+esc(((p&&p.content)||"").split("\n")[0].slice(0,50)||"Post")+'</b>: '+esc(r.error)+'</li>' }).join("")+'</ul><div class="actions"><button class="btn sm" type="button" id="beDone">Done</button></div>';
+          $("#beDone").onclick=done; btn.remove();
+        } else done();
+      }).catch(function(err){ btn.disabled=false; btn.textContent="Try again"; toast(err.message,true) });
+      return;
+    }
+    btn.disabled=true; btn.textContent="Checking…";
+    runEdit(ids, e, true).then(function(rs){
+      btn.disabled=false;
+      var ch=rs.filter(function(r){return r.changed}), same=rs.filter(function(r){return !r.changed&&!r.skipped}), bad=rs.filter(function(r){return r.skipped});
+      var h='<p class="hint" style="margin:0"><b>'+ch.length+'</b> will change'+(same.length?', '+same.length+' already match':'')+(bad.length?', '+bad.length+' can’t be changed':'')+'.</p><div class="bediffs">';
+      h+=ch.map(function(r){
+        var pl=r.platforms_before.join(",")!==r.platforms_after.join(",") ? '<span class="sub">Platforms: '+esc(r.platforms_before.map(platName).join(", ")||"none")+' → '+esc(r.platforms_after.map(platName).join(", ")||"none")+'</span>' : '';
+        var warn=(r.notes||[]).concat(r.status==="scheduled"&&r.problems.length?["Will go back to drafts: "+r.problems[0]]:[]);
+        return '<div class="bediff"><div class="bdh"><b>'+(r.at?esc(fmtDate(r.at,true)):"Draft")+'</b> '+socialChip(r.status)+'</div>'+pl+(r.before!==r.after?'<pre class="dlines">'+lineDiff(r.before,r.after)+'</pre>':'<span class="sub">Caption unchanged.</span>')+
+          (warn.length?'<span class="sub warnx">'+esc(warn.join(" "))+'</span>':'')+'</div>' }).join("");
+      h+=bad.map(function(r){ var p=sel.filter(function(x){return x.id===r.id})[0]; return '<div class="bediff"><span class="sub warnx"><b>'+esc(((p&&p.content)||"").split("\n")[0].slice(0,50)||"Post")+'</b>: '+esc(r.error)+'</span></div>' }).join("")+'</div>';
+      $("#bePrev").innerHTML=h; $("#bePrev").scrollIntoView({block:"nearest"});
+      if(ch.length){ lastEdit=e; btn.textContent="Save changes to "+ch.length } else btn.textContent="Preview changes";
+    }).catch(function(err){ btn.disabled=false; btn.textContent="Preview changes"; toast(err.message,true) });
+  };
+  $("#beFind").focus();
 }
 
 /* Spreadsheet import: one row per post. */
@@ -1630,7 +1716,7 @@ function socialView(brandParam){
         });
         html+='<div id="bulkBar" class="bulkbar" hidden></div>';
         v.innerHTML=html;
-        bulkSetup(posts, brand);
+        bulkSetup(posts, brand, accounts);
         $("#importBtn").onclick=function(){ importSheet($("#importHost"), brand, accounts); $("#imText").focus() };
         slotsPanel($("#slotsHost"), brand);
         perfPanel($("#perfHost"), brand);

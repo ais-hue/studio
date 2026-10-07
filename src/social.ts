@@ -405,6 +405,95 @@ export async function reschedule(env: Env, p: SocialPost, at: number): Promise<v
   await env.DB.prepare("UPDATE social_posts SET scheduled_at = ?, updated_at = ? WHERE id = ?").bind(at, now(), p.id).run();
 }
 
+/* ---------- bulk edits ---------- */
+/** One set of changes, applied the same way to every selected post. */
+export interface BulkEdit {
+  find?: string; replace?: string;            // literal text, every occurrence, in the caption and any per-platform captions
+  start?: string; end?: string;               // a line added at the start or end of the caption
+  tags_add?: string[]; tags_remove?: string[];
+  platforms_add?: string[]; platforms_remove?: string[];
+  pinterest_link?: string; pinterest_board?: string;
+}
+
+const tagRe = (t: string) => new RegExp(`(^|[\\s(])#${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w\\u00C0-\\u024F])`, "giu");
+const cleanTag = (x: unknown) => String(x ?? "").trim().replace(/^#+/, "").replace(/[^\p{L}\p{N}_]/gu, "").slice(0, 60);
+
+export function cleanEdit(d: any): BulkEdit {
+  const list = (v: unknown, f: (x: unknown) => string) => (Array.isArray(v) ? v : typeof v === "string" ? v.split(/[\s,]+/) : []).map(f).filter(Boolean).slice(0, 30);
+  const s = (v: unknown, max: number) => (v === undefined || v === null ? undefined : String(v).slice(0, max));
+  const e: BulkEdit = {
+    find: s(d?.find, 500), replace: s(d?.replace, 2000),
+    start: s(d?.start, 2000)?.trim() || undefined, end: s(d?.end, 2000)?.trim() || undefined,
+    tags_add: list(d?.tags_add, cleanTag), tags_remove: list(d?.tags_remove, cleanTag),
+    platforms_add: list(d?.platforms_add, (x) => String(x).trim().toLowerCase()).filter((p) => PLATFORMS[p]),
+    platforms_remove: list(d?.platforms_remove, (x) => String(x).trim().toLowerCase()).filter((p) => PLATFORMS[p]),
+    pinterest_link: s(d?.pinterest_link, 1000)?.trim(), pinterest_board: s(d?.pinterest_board, 80)?.trim(),
+  };
+  if (!e.find) { e.find = undefined; e.replace = undefined; }
+  if (e.pinterest_link && !/^https:\/\//.test(e.pinterest_link)) throw new HttpError(400, "The Pinterest link needs to start with https://");
+  const any = e.find || e.start || e.end || e.tags_add!.length || e.tags_remove!.length || e.platforms_add!.length || e.platforms_remove!.length || e.pinterest_link !== undefined || e.pinterest_board;
+  if (!any) throw new HttpError(400, "Say what to change first.");
+  return e;
+}
+
+/** Apply one caption-level change set to a piece of text. */
+function editText(text: string, e: BulkEdit): string {
+  let out = text;
+  if (e.find) {
+    // Whole words and whole hashtags only, so finding #wordsearch leaves #wordsearchpuzzle alone.
+    const w = /[\p{L}\p{N}_]/u, f = e.find;
+    const re = new RegExp((w.test(f[0]) ? "(?<![\\p{L}\\p{N}_#@])" : "") + f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (w.test(f[f.length - 1]) ? "(?![\\p{L}\\p{N}_])" : ""), "gu");
+    out = out.replace(re, () => e.replace ?? "");
+  }
+  for (const t of e.tags_remove || []) out = out.replace(tagRe(t), "$1");
+  if (e.start && !out.includes(e.start)) out = e.start + (out.trim() ? "\n\n" + out : "");
+  if (e.end && !out.includes(e.end)) {
+    // Put a new line above the hashtags, if the caption ends with them.
+    const lines = out.trimEnd().split("\n");
+    const last = lines[lines.length - 1] || "";
+    const tagLine = /^\s*(#[\p{L}\p{N}_]+\s*)+$/u.test(last);
+    if (tagLine && lines.length > 1) { lines.splice(lines.length - 1, 0, e.end, ""); out = lines.join("\n").replace(/\n{3,}/g, "\n\n"); }
+    else out = out.trimEnd() + (out.trim() ? "\n\n" : "") + e.end;
+  }
+  const add = (e.tags_add || []).filter((t) => !tagRe(t).test(out));
+  if (add.length) {
+    const lines = out.trimEnd().split("\n");
+    const last = lines[lines.length - 1] || "";
+    if (/^\s*(#[\p{L}\p{N}_]+\s*)+$/u.test(last)) lines[lines.length - 1] = last.trimEnd() + " " + add.map((t) => "#" + t).join(" ");
+    else lines.push(...(out.trim() ? [""] : []), add.map((t) => "#" + t).join(" "));
+    out = lines.join("\n");
+  }
+  // Tidy what removals leave behind: doubled spaces, empty hashtag lines, runs of blank lines.
+  return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** What a post would look like after the change set. Nothing is saved here. */
+export function applyEdit(p: SocialPost, e: BulkEdit, accounts: SocialAccount[], defaultBoard = ""): { content: string; targets: string; options: string; notes: string[] } {
+  const opts = parse<any>(p.options, {});
+  let targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []);
+  const notes: string[] = [];
+  const content = editText(p.content, e);
+  if (opts.captions && typeof opts.captions === "object") {
+    for (const k of Object.keys(opts.captions)) if (opts.captions[k]) opts.captions[k] = editText(String(opts.captions[k]), e);
+  }
+  for (const pl of e.platforms_remove || []) targets = targets.filter((t) => t.platform !== pl);
+  for (const pl of e.platforms_add || []) {
+    if (targets.some((t) => t.platform === pl)) continue;
+    const acc = accounts.find((a) => a.platform === pl);
+    if (!acc) { notes.push(`${PLATFORMS[pl].name} isn’t connected for this brand, so it was left out.`); continue; }
+    targets.push({ platform: pl, accountId: acc._id });
+    if (pl === "pinterest" && !opts.pinterest?.boardId && (e.pinterest_board || defaultBoard)) opts.pinterest = { ...(opts.pinterest || {}), boardId: e.pinterest_board || defaultBoard };
+  }
+  if (e.pinterest_link !== undefined || e.pinterest_board) {
+    if (targets.some((t) => t.platform === "pinterest")) {
+      opts.pinterest = { ...(opts.pinterest || {}) };
+      if (e.pinterest_link !== undefined) { if (e.pinterest_link) opts.pinterest.link = e.pinterest_link; else delete opts.pinterest.link; }
+      if (e.pinterest_board) opts.pinterest.boardId = e.pinterest_board;
+    }
+  }
+  return { content, targets: JSON.stringify(targets), options: JSON.stringify(opts), notes };
+}
+
 /* ---------- posting slots ---------- */
 export interface Slot { day: number; time: string } // day 0 = Sunday … 6 = Saturday, time "HH:MM" in the workspace time zone
 

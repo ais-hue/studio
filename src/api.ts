@@ -14,7 +14,7 @@ import { importUrl } from "./mcp";
 import { Kind, createInitiative, deleteInitiative, initiativeDetail, listInitiatives, setInitiative, updateInitiative } from "./initiatives";
 import { FREE_BYTES, FileRow, fileUrl, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { appsStatus, saveApp, connectPassword } from "./direct/engine";
-import { PLATFORMS, SocialPost, connectMode, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
+import { PLATFORMS, SocialPost, applyEdit, cleanEdit, connectMode, renameProfile, getSlots, listProfiles as brandsList, nextSlot, reschedule, setSlots, connectUrl, createProfile, disconnect, listAccounts, listProfiles, parseJson, pinterestBoards, problems, publish, socialReady, syncSocial, testKey, tiktokInfo, unschedule, uploadMedia } from "./social";
 
 const TEMPLATES = ["waitlist", "launch", "links", "post"];
 const THEMES = ["auto", "light", "dark"];
@@ -921,6 +921,56 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         }
       }
       return json({ done, failed });
+    }
+
+    /*
+     * Bulk edit: one change set applied to several drafts and scheduled posts. With dry: true nothing is saved and
+     * each post comes back with its before and after. Scheduled posts are pulled back, changed and put back at the
+     * same time; if a change leaves one unable to go out, it stays a draft planned for that time and says why.
+     */
+    if (s1 === "bulk-edit" && m === "POST") {
+      const d = await body(req);
+      const edit = cleanEdit(d.edit);
+      const dry = d.dry === true;
+      const ids: string[] = (Array.isArray(d.ids) ? d.ids : []).slice(0, 25).map((x: any) => str(x, 40)).filter(Boolean);
+      if (!ids.length) throw new HttpError(400, "Pick some posts first.");
+      const accCache = new Map<string, Awaited<ReturnType<typeof listAccounts>>>(), boardCache = new Map<string, string>();
+      const accountsFor = async (b: string) => { if (!accCache.has(b)) accCache.set(b, await listAccounts(env, b)); return accCache.get(b)!; };
+      const boardFor = async (b: string) => { if (!boardCache.has(b)) boardCache.set(b, (await getBrief(env, b)).pinterest_board || ""); return boardCache.get(b)!; };
+      const plats = (j: string) => parseJson<Array<{ platform: string }>>(j, []).map((x) => x.platform);
+      const out: Array<Record<string, unknown>> = [];
+      for (const pid of ids) {
+        try {
+          const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost & { planned_at: number | null }>();
+          if (!p) throw new HttpError(404, "That post doesn’t exist any more.");
+          if (!["draft", "scheduled"].includes(p.status)) throw new HttpError(409, p.status === "publishing" ? "Going out right now." : "Already posted, so it can’t be changed.");
+          const at = p.status === "scheduled" ? p.scheduled_at : null;
+          if (at && at < t + 3 * 60_000) throw new HttpError(409, "Goes out in a moment, so it was left as it was.");
+          const next = applyEdit(p, edit, edit.platforms_add?.length ? await accountsFor(p.profile_id) : [], edit.platforms_add?.includes("pinterest") ? await boardFor(p.profile_id) : "");
+          const changed = next.content !== p.content || next.targets !== p.targets || next.options !== p.options;
+          const after = { ...p, ...next } as SocialPost;
+          const row: Record<string, unknown> = { id: p.id, status: p.status, at: at || p.planned_at || null, changed, notes: next.notes,
+            before: p.content, after: next.content, platforms_before: plats(p.targets), platforms_after: plats(next.targets), problems: problems(after) };
+          if (dry || !changed) { out.push(row); continue; }
+          if (p.status === "scheduled") await unschedule(env, p);
+          await env.DB.prepare("UPDATE social_posts SET content = ?, targets = ?, options = ?, planned_at = COALESCE(?, planned_at), updated_at = ? WHERE id = ?")
+            .bind(next.content, next.targets, next.options, at, now(), p.id).run();
+          row.saved = true;
+          if (at) {
+            const fresh = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(p.id).first<SocialPost>())!;
+            const issues = problems(fresh);
+            if (issues.length) { row.status = "draft"; row.error = "Back in drafts: " + issues[0]; }
+            else {
+              try { await publish(env, fresh, at); row.status = "scheduled"; }
+              catch (e) { row.status = "draft"; row.error = "Back in drafts: " + ((e as Error).message || "it couldn’t be rescheduled."); }
+            }
+          }
+          out.push(row);
+        } catch (e) {
+          out.push({ id: pid, error: e instanceof HttpError ? e.message : (e as Error).message || "Something went wrong.", skipped: true });
+        }
+      }
+      return json({ results: out });
     }
 
     /* Import posts from a spreadsheet (parsed in the browser, sent a few rows at a time). */
