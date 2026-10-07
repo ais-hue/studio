@@ -537,3 +537,14 @@ a.t:hover{text-decoration:underline}
 .imtable{max-height:320px;overflow:auto}
 .imtable td{vertical-align:top}
 .bkplan li.skip{color:var(--t3)}
+.bulkbar .bkedit{max-height:70vh;overflow:auto}
+.bediffs{display:flex;flex-direction:column;gap:10px}
+.bediff{border:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--field)}
+.bediff .bdh{display:flex;gap:8px;align-items:center;font-size:13px}
+.bediff .sub{display:block;font-size:12px;color:var(--t3)}
+.dlines{margin:0;font-size:12.5px;white-space:pre-wrap;word-break:break-word;font-family:inherit;line-height:1.5}
+.dl{display:block;padding:0 6px}
+.dl.add{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--t1)}
+.dl.add::before{content:"+ ";color:var(--good)}
+.dl.del{background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--t2);text-decoration:line-through}
+.dl.del::before{content:"− ";color:var(--danger)}
