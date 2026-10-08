@@ -196,3 +196,35 @@ footer.sitefoot{border-top:4px solid var(--rule);padding-top:24px;display:flex;f
 .sf-bot{border-top:1px solid var(--line);padding-top:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;color:var(--faint)}
 .sf-social{display:flex;gap:16px;flex-wrap:wrap}
 .sf-social a{color:var(--muted)}
+
+/* split: words beside a picture */
+.bk-split{display:flex;flex-direction:column;gap:22px}
+.bk-split-text{display:flex;flex-direction:column;gap:16px;min-width:0}
+.bk-split-media img{display:block;width:100%;height:auto;border:1px solid var(--line)}
+.bk-split-media.phone{max-width:min(260px,62vw);margin-inline:auto;width:100%}
+.bk-split-media.phone img{border:9px solid #1b1a17;border-radius:30px !important;background:#1b1a17}
+@media (min-width:860px){
+  .bk-split.has-media{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:clamp(28px,5vw,64px);align-items:center}
+  .bk-split.has-media.img-left{grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr)}
+  .bk-split.has-media.img-left .bk-split-media{order:-1}
+  .bk-split-media.phone{max-width:280px}
+}
+.bk-pts{border-top:0;display:flex;flex-direction:column}
+.bk-pts li{padding:10px 0;border-bottom:1px solid var(--line)}
+.bk-pts li::before{display:inline-block;width:14px;height:4px;margin:0 10px 4px 0;vertical-align:middle}
+
+/* cards */
+.bk-intro{color:var(--muted)}
+.bk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.bk-cards.cols-2{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+@media (min-width:860px){.bk-cards.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.bk-cards.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.bk-card{border:1px solid var(--rule);background:var(--bg);padding:18px;display:flex;flex-direction:column;gap:10px}
+.bk.bg-soft .bk-card{background:var(--bg)}
+.bk.bg-accent .bk-card{background:var(--bg);color:var(--text)}
+.bk-cardimg img{display:block;width:56px;height:56px;object-fit:cover;border-radius:13px !important;border:1px solid var(--line)}
+.bk-card h3{font-family:var(--f-display);font-stretch:112%;font-weight:800;text-transform:uppercase;font-size:18px;line-height:1.15;margin:0}
+.bk-card .prose{font-size:15px;color:var(--muted)}
+.bk-card .prose p{margin:0}
+.bk-cardlink{margin-top:auto;font-weight:600;color:var(--text);text-decoration:none}
+.bk-cardlink:hover{color:var(--pc)}
+.bk.bg-accent .bk-card .prose,.bk.bg-accent .bk-cardlink{color:var(--text)}

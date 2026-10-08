@@ -626,3 +626,5 @@ a.t:hover{text-decoration:underline}
 .dtop b{font-weight:600;font-size:14px;overflow-wrap:anywhere}
 .dbot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between}
 .drow .chip{text-transform:none}
+.npimport summary{cursor:pointer;font-size:13.5px;font-weight:500;color:var(--t2)}
+.npimport[open] summary{color:var(--t1)}

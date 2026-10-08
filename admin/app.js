@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610081400";
+var VERSION = "202610081600";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -271,6 +271,8 @@ function siteView(sid, tab, pageId){
 var BLOCK_DEFS = {
   hero:{name:"Hero", blurb:"Headline, a line, buttons, a picture"},
   text:{name:"Text", blurb:"Paragraphs, headings, lists, links"},
+  split:{name:"Words and picture", blurb:"Text beside a picture or screenshot"},
+  cards:{name:"Cards", blurb:"A grid of items, each with an icon and link"},
   image:{name:"Image", blurb:"One picture with a caption"},
   gallery:{name:"Screenshots", blurb:"A row of app screenshots"},
   store:{name:"Store buttons", blurb:"App Store and Google Play, tracked"},
@@ -282,7 +284,7 @@ var BLOCK_DEFS = {
   video:{name:"Video", blurb:"A video file or YouTube link"},
   divider:{name:"Divider", blurb:"A line or a gap"}
 };
-var BLOCK_ORDER=["hero","text","image","gallery","store","features","quote","faq","signup","links","video","divider"];
+var BLOCK_ORDER=["hero","text","split","cards","image","gallery","store","features","quote","faq","signup","links","video","divider"];
 function newBlockId(){ return "b"+Math.random().toString(36).slice(2,10) }
 function blankBlock(type){
   var b={id:newBlockId(), type:type, bg:"page", space:"normal"};
@@ -295,6 +297,8 @@ function blankBlock(type){
   if(type==="signup"){ b.heading="Get the news"; b.cta="Keep me posted" }
   if(type==="divider") b.style="rule";
   if(type==="image") b.width="column";
+  if(type==="split"){ b.heading=""; b.md=""; b.points=[]; b.buttons=[]; b.side="right" }
+  if(type==="cards"){ b.columns="3"; b.items=[{title:"",text:""},{title:"",text:""},{title:"",text:""}] }
   return b;
 }
 /** One line that tells blocks apart in the list. */
@@ -316,6 +320,9 @@ function blockNeeds(b){
   if(b.type==="links"&&!it.some(function(x){return x.label&&x.url})) return "Add a link";
   if(b.type==="video"&&!b.url) return "Add a video";
   if(b.type==="quote"&&!b.text) return "Add the quote";
+  if(b.type==="split"&&!b.heading&&!b.md) return "Add a heading or text";
+  if(b.type==="split"&&b.image&&b.image.url&&!b.image.alt) return "Describe the picture";
+  if(b.type==="cards"&&!it.some(function(x){return x.title||x.text})) return "Add a card";
   return "";
 }
 
@@ -385,7 +392,7 @@ function blockEditor(host, site, p, onConverted){
   function rows(b, key, cols, addLabel, max){
     var items=b[key]||[];
     return '<div class="brows" data-rows="'+key+'">'+items.map(function(it,i){
-      return '<div class="brow"><div class="stack" style="gap:8px;flex:1;min-width:0">'+cols.map(function(cdef){ return cdef[2]==="img" ? imageField(key+"."+i+".url", key+"."+i+".alt", cdef[1], b) : txt(b, key+"."+i+"."+cdef[0], cdef[1], cdef[2]) }).join("")+'</div>'+
+      return '<div class="brow"><div class="stack" style="gap:8px;flex:1;min-width:0">'+cols.map(function(cdef){ return cdef[2]==="img" ? imageField(key+"."+i+"."+cdef[0], key+"."+i+".alt", cdef[1], b) : txt(b, key+"."+i+"."+cdef[0], cdef[1], cdef[2]) }).join("")+'</div>'+
         '<div class="browtools"><button type="button" class="ico" data-rowup="'+key+'" data-i="'+i+'" aria-label="Move up"'+(i===0?" disabled":"")+'>↑</button><button type="button" class="ico" data-rowdel="'+key+'" data-i="'+i+'" aria-label="Remove">✕</button></div></div>' }).join("")+
       (items.length<max?'<button type="button" class="btn sm" data-rowadd="'+key+'">'+esc(addLabel)+'</button>':'')+'</div>' }
 
@@ -397,6 +404,19 @@ function blockEditor(host, site, p, onConverted){
       (b.buttons||[]).forEach(function(x,i){ if(!x.style) x.style=i?"plain":"primary" });
       h+=imageField("image.url","image.alt","Picture",b)+(b.image&&b.image.url?seg(b,"image.frame","Picture style",[["none","Plain"],["phone","In a phone"]]):"");
       h+=seg(b,"align","Line up",[["left","Left"],["center","Centre"]]);
+    }
+    if(b.type==="split"){
+      h+=txt(b,"eyebrow","Small line above",{max:80})+txt(b,"heading","Heading",{max:160})+txt(b,"md","Text",{area:true,rows:4,max:4000,code:true,hint:"**bold**, [words](link), - for a list."});
+      h+='<div class="field"><label for="bfp'+b.id+'">Points</label><textarea id="bfp'+b.id+'" data-lines="points" rows="3" maxlength="1300">'+esc((b.points||[]).join("\n"))+'</textarea><span class="hint">One per line. Shown as a short list.</span></div>';
+      h+='<span class="label">Buttons</span>'+rows(b,"buttons",[["label","Button words",{max:40}],["url","Goes to",{max:1000,ph:"https://… or /page"}]],"Add a button",2);
+      (b.buttons||[]).forEach(function(x,i){ if(!x.style) x.style=i?"plain":"primary" });
+      h+=imageField("image.url","image.alt","Picture",b)+(b.image&&b.image.url?seg(b,"image.frame","Picture style",[["none","Plain"],["phone","In a phone"]]):"");
+      h+=seg(b,"side","Picture on the",[["right","Right"],["left","Left"]]);
+    }
+    if(b.type==="cards"){
+      h+=txt(b,"heading","Heading",{max:120})+txt(b,"intro","Line under it",{area:true,rows:2,max:1000});
+      h+='<span class="label">Cards</span>'+rows(b,"items",[["img","Icon","img"],["title","Title",{max:100}],["text","Text",{area:true,rows:2,max:1000}],["url","Goes to",{max:1000,ph:"/page or https://…"}],["link_text","Link words",{max:40,ph:"e.g. See Seek"}]],"Add a card",12);
+      h+=seg(b,"columns","Cards per row",[["3","Three"],["2","Two"]]);
     }
     if(b.type==="text") h+=txt(b,"md","Text",{area:true,rows:8,max:20000,code:true,hint:"## for a heading, - for a list, **bold**, [words](link)."});
     if(b.type==="image") h+=imageField("url","alt","Image",b)+txt(b,"caption","Caption",{max:200})+seg(b,"width","Width",[["column","Text width"],["full","Full width"]]);
@@ -461,6 +481,7 @@ function blockEditor(host, site, p, onConverted){
     var b=blocks.filter(function(x){return x.id===openId})[0]; if(!b) return;
     var card=$(".bcard.open",L);
     $$("[data-k]",card).forEach(function(el){ el.addEventListener("input", function(){ set(b, el.dataset.k, el.value); refreshHead(card,b); changed() }); el.addEventListener("change", function(){ set(b, el.dataset.k, el.value); refreshHead(card,b); changed() }) });
+    $$("[data-lines]",card).forEach(function(el){ el.addEventListener("input", function(){ b[el.dataset.lines]=el.value.split("\n"); refreshHead(card,b); changed() }) });
     $$("[data-seg]",card).forEach(function(x){ x.onclick=function(){ set(b, x.dataset.seg, x.dataset.v); $$('[data-seg="'+x.dataset.seg+'"]',card).forEach(function(y){ y.setAttribute("aria-pressed", String(y===x)) }); changed() } });
     $$("[data-rowadd]",card).forEach(function(x){ x.onclick=function(){ var k=x.dataset.rowadd; b[k]=b[k]||[]; b[k].push(k==="buttons"?{label:"",url:"",style:b[k].length?"plain":"primary"}:{}); draw(); changed() } });
     $$("[data-rowdel]",card).forEach(function(x){ x.onclick=function(){ b[x.dataset.rowdel].splice(+x.dataset.i,1); draw(); changed() } });
@@ -511,6 +532,129 @@ function undoToast(fn){
   $("button",t).onclick=function(){ clearTimeout(gone); t.remove(); fn() };
 }
 
+/* ============ import a page from another website ============ */
+/** Turn a web page's main content into blocks. Words are kept exactly; layout is left to Studio's blocks. */
+function htmlToBlocks(html, pageUrl){
+  var doc=new DOMParser().parseFromString(html,"text/html"), base=new URL(pageUrl), host=base.hostname.replace(/^www\./,"");
+  var meta=function(sel){ var m=doc.querySelector(sel); return m?(m.getAttribute("content")||"").trim():"" };
+  var SKIP=/^(script|style|noscript|template|svg|iframe|form|button|input|select|textarea|nav|header|footer|dialog|canvas|object|embed|link|meta)$/;
+  var BLOCKY=/^(p|h[1-6]|ul|ol|div|section|article|main|aside|img|picture|figure|table|blockquote|details|hr|pre|dl|address)$/;
+  function href(h){
+    if(!h) return ""; h=h.trim();
+    if(/^(mailto|tel):/i.test(h)) return h;
+    if(h.charAt(0)==="#" || /^javascript:/i.test(h)) return "";
+    try{ var u=new URL(h, base);
+      if(!/^https?:$/.test(u.protocol)) return "";
+      u.searchParams.delete("hsLang"); ["utm_source","utm_medium","utm_campaign","utm_content","utm_term"].forEach(function(k){ u.searchParams.delete(k) });
+      if(u.hostname.replace(/^www\./,"")===host) return (u.pathname.replace(/\/+$/,"")||"/")+u.search;
+      return u.toString();
+    }catch(e){ return "" }
+  }
+  function src(img){
+    var s=img.getAttribute("src")||img.getAttribute("data-src")||"";
+    var ss=img.getAttribute("srcset")||img.getAttribute("data-srcset");
+    if(ss){ var best=ss.split(",").map(function(x){ var p=x.trim().split(/\s+/); return {u:p[0], w:parseInt(p[1])||0} }).sort(function(a,b){return b.w-a.w})[0]; if(best&&best.u) s=best.u }
+    if(!s||/^data:/.test(s)) return "";
+    var w=parseInt(img.getAttribute("width")), h=parseInt(img.getAttribute("height")); if((w&&w<4)||(h&&h<4)) return "";
+    try{ var u=new URL(s, base); return u.protocol==="https:"?u.toString():"" }catch(e){ return "" }
+  }
+  var hidden=function(el){ return el.hasAttribute("hidden") || el.getAttribute("aria-hidden")==="true" || /display\s*:\s*none/.test(el.getAttribute("style")||"") };
+  function inline(node){
+    var out="";
+    node.childNodes.forEach(function(n){
+      if(n.nodeType===3){ out+=n.nodeValue.replace(/\s+/g," "); return }
+      if(n.nodeType!==1 || hidden(n)) return;
+      var t=n.tagName.toLowerCase();
+      if(SKIP.test(t) || t==="img" || t==="picture") return;
+      if(t==="br"){ out+=" "; return }
+      var inner=inline(n), lead=/^\s/.test(inner)?" ":"", trail=/\s$/.test(inner)?" ":"", x=inner.trim();
+      if(!x){ out+=lead; return }
+      if(t==="strong"||t==="b") out+=lead+"**"+x+"**"+trail;
+      else if(t==="em"||t==="i") out+=lead+"*"+x+"*"+trail;
+      else if(t==="code") out+=lead+"`"+x+"`"+trail;
+      else if(t==="a"){ var h=href(n.getAttribute("href")); out+=lead+(h?"["+x+"]("+h+")":x)+trail }
+      else out+=inner;
+    });
+    return out;
+  }
+  var toks=[];
+  var md=function(s){ s=s.replace(/[ \t]+/g," ").trim(); if(s) toks.push({t:"md", s:s}) };
+  // A whole list (nested ones flattened into it) becomes one token, so it stays one list.
+  function list(el, ordered, lines){
+    var n=0, top=!lines; lines=lines||[];
+    Array.prototype.forEach.call(el.children, function(li){
+      if(li.tagName.toLowerCase()!=="li"||hidden(li)) return;
+      var clone=li.cloneNode(true); Array.prototype.forEach.call(clone.querySelectorAll("ul,ol"), function(x){ x.remove() });
+      var text=inline(clone).replace(/\s+/g," ").trim(); if(text) lines.push((ordered?(++n)+". ":"- ")+text);
+      Array.prototype.forEach.call(li.querySelectorAll(":scope > ul, :scope > ol"), function(sub){ list(sub, sub.tagName.toLowerCase()==="ol", lines) });
+    });
+    if(top && lines.length) toks.push({t:"md", s:lines.join("\n")});
+  }
+  function walk(el){
+    Array.prototype.forEach.call(el.childNodes, function(n){
+      if(n.nodeType===3){ if(n.nodeValue.trim()) md(n.nodeValue); return }
+      if(n.nodeType!==1 || hidden(n)) return;
+      var t=n.tagName.toLowerCase();
+      if(SKIP.test(t)) return;
+      if(t==="h1"){ var x=n.textContent.replace(/\s+/g," ").trim(); if(x) toks.push({t:"h1", s:x}); return }
+      if(/^h[2-6]$/.test(t)){ var y=inline(n).replace(/\*\*/g,"").trim(); if(y) md(({h2:"# ",h3:"## "}[t]||"### ")+y); return }
+      if(t==="img"){ var u=src(n); if(u) toks.push({t:"img", url:u, alt:(n.getAttribute("alt")||"").trim()}); return }
+      if(t==="picture"){ var pi=n.querySelector("img"); if(pi) walk({childNodes:[pi]}); return }
+      if(t==="figure"){ var fi=n.querySelector("img"), cap=n.querySelector("figcaption"); var fu=fi&&src(fi); if(fu) toks.push({t:"img", url:fu, alt:(fi.getAttribute("alt")||"").trim(), caption:cap?cap.textContent.replace(/\s+/g," ").trim():""}); else walk(n); return }
+      if(t==="hr"){ md("---"); return }
+      if(t==="ul"||t==="ol"){ list(n, t==="ol"); return }
+      if(t==="blockquote"){ var q=inline(n).trim(); if(q) md("> "+q); return }
+      if(t==="details"){ var sm=n.querySelector("summary"), cl=n.cloneNode(true), cs=cl.querySelector("summary"); if(cs) cs.remove();
+        var sub=htmlToBlocks("<main>"+cl.innerHTML+"</main>", pageUrl).blocks.filter(function(b){return b.type==="text"}).map(function(b){return b.md}).join("\n\n");
+        if(sm) toks.push({t:"faq", q:sm.textContent.replace(/\s+/g," ").trim(), a:sub||cl.textContent.trim()}); return }
+      if(t==="table"){ Array.prototype.forEach.call(n.querySelectorAll("tr"), function(tr){ var cells=Array.prototype.map.call(tr.children, function(c){ return inline(c).trim() }).filter(Boolean); if(cells.length) md("- "+cells.join(" · ")) }); return }
+      if(t==="p"||t==="address"||t==="pre"||t==="dt"||t==="dd"){ Array.prototype.forEach.call(n.querySelectorAll("img"), function(im){ var iu=src(im); if(iu) toks.push({t:"img", url:iu, alt:(im.getAttribute("alt")||"").trim()}) }); md(inline(n)); return }
+      // A container: go inside if it holds blocks, otherwise it's a run of words.
+      var blocky=Array.prototype.some.call(n.querySelectorAll("*"), function(c){ return BLOCKY.test(c.tagName.toLowerCase()) });
+      if(blocky) walk(n); else md(inline(n));
+    });
+  }
+  var root=doc.querySelector("main")||doc.querySelector("[role=main]")||doc.body;
+  walk(root);
+  // Tokens to blocks: the first heading becomes the hero, words gather into text blocks between pictures.
+  var blocks=[], buf=[], faq=null, hero=null, i;
+  var flush=function(){ if(buf.length){ blocks.push({type:"text", md:buf.join("\n\n")}); buf=[] } if(faq){ blocks.push(faq); faq=null } };
+  var plain=function(s){ return s.replace(/\*\*|\*|`/g,"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1") };
+  for(i=0;i<toks.length;i++){
+    var k=toks[i];
+    if(k.t==="h1" && !hero){
+      hero={type:"hero", headline:k.s.slice(0,160)};
+      if(buf.length===1 && buf[0].length<70 && !/[\[#\n]/.test(buf[0])){ hero.eyebrow=plain(buf[0]); buf=[] }
+      flush();
+      var nx=toks[i+1]; if(nx&&nx.t==="md"&&nx.s.length<300&&!/^(#|-|\d+\.|>)/.test(nx.s)){ hero.sub=plain(nx.s); i++ }
+      blocks.push(hero); continue;
+    }
+    if(k.t==="h1"){ buf.push("# "+k.s); continue }
+    if(k.t==="md"){ if(faq){ flush() } buf.push(k.s); continue }
+    if(k.t==="faq"){ if(buf.length){ var b0=buf; buf=[]; blocks.push({type:"text", md:b0.join("\n\n")}) } faq=faq||{type:"faq", items:[]}; faq.items.push({q:k.q, a:k.a}); continue }
+    if(k.t==="img"){ flush(); blocks.push({type:"image", url:k.url, alt:k.alt||"", caption:k.caption||"", width:"column"}) }
+  }
+  flush();
+  var title=(hero&&hero.headline)||(doc.title||"").split(/\s[|–—-]\s/)[0].trim()||"Imported page";
+  if(!hero) blocks.unshift({type:"hero", headline:title});
+  return { title:title, description: meta('meta[name="description"]')||meta('meta[property="og:description"]'), blocks:blocks,
+    slug: decodeURIComponent(base.pathname).replace(/^\/+|\/+$/g,"").replace(/\//g,"-") };
+}
+
+/** Fetch a page through Studio, copy its pictures into Files, and save it as a draft block page. */
+function importPage(site, url, name, copyImages, onStep){
+  return api("POST","import/page",{url:url}).then(function(r){
+    var res=htmlToBlocks(r.html, r.url), imgs=[];
+    res.blocks.forEach(function(b){ if(b.type==="image") imgs.push(b) });
+    var failed=0;
+    var copy=copyImages ? imgs.reduce(function(ch,b,n){ return ch.then(function(){ if(onStep) onStep("Copying picture "+(n+1)+" of "+imgs.length);
+      return api("POST","import/file",{url:b.url, folder:site.name, alt:b.alt}).then(function(f){ b.url=f.url }).catch(function(){ failed++ }) }) }, Promise.resolve()) : Promise.resolve();
+    return copy.then(function(){
+      return api("POST","pages",{site_id:site.id, title:(name||res.title).slice(0,80), slug:res.slug||name||res.title, template:"blocks", content:{blocks:res.blocks, description:res.description}});
+    }).then(function(p){ return {page:p.page, pictures:imgs.length, failed:failed} });
+  });
+}
+
 function sitePages(site, pages, pageId){
   var body=$("#tabBody"), newTpl="blocks";
   var sel = pages.filter(function(p){return p.id===pageId})[0] || pages[0];
@@ -523,8 +667,12 @@ function sitePages(site, pages, pageId){
     var h='<section class="panel"><h2 class="sec">Pages <button class="btn sm primary" type="button" id="newPage">New page</button></h2>';
     if(showNew){
       h+='<form class="sheet" id="pageForm" style="border:0;border-bottom:1px solid var(--line)"><h3>New page</h3><div class="tpls" role="group" aria-label="Template">'+Object.keys(TEMPLATES).map(function(k){ return '<button type="button" data-tpl="'+k+'" aria-pressed="'+(k===newTpl)+'"><b>'+TEMPLATES[k].name+'</b><span>'+TEMPLATES[k].blurb+'</span></button>' }).join("")+'</div>'+
-        '<div class="field"><label for="npTitle">Page name</label><input type="text" id="npTitle" required maxlength="80" placeholder="e.g. Early access"></div>'+
-        '<div class="actions"><button class="btn primary" type="submit">Create page</button><button class="btn ghost" type="button" id="cancelPage">Cancel</button></div></form>';
+        '<div class="field"><label for="npTitle">Page name</label><input type="text" id="npTitle" maxlength="80" placeholder="e.g. Early access"></div>'+
+        '<details class="npimport"'+(store("studio.importOpen")==="1"?" open":"")+'><summary>Or import pages from another website</summary><div class="stack" style="gap:10px;margin-top:10px">'+
+          '<div class="field"><label for="npUrls">Web addresses</label><textarea id="npUrls" rows="3" placeholder="https://example.com/about&#10;https://example.com/privacy"></textarea><span class="hint">One per line. Each becomes a draft page here, with its words kept exactly and its address reused. The original site isn’t touched.</span></div>'+
+          '<label class="check"><input type="checkbox" id="npCopy" checked> Copy pictures into Files, so they keep working if the old site goes</label></div></details>'+
+        '<div id="npProg" class="hint"></div>'+
+        '<div class="actions"><button class="btn primary" type="submit" id="npGo">Create page</button><button class="btn ghost" type="button" id="cancelPage">Cancel</button></div></form>';
     }
     h+=rowsHtml()+'</section><div id="editorHost"></div>';
     body.innerHTML=h;
@@ -532,8 +680,27 @@ function sitePages(site, pages, pageId){
     if(showNew){
       $("#cancelPage").onclick=function(){ render(false) };
       $$("[data-tpl]").forEach(function(b){ b.onclick=function(){ newTpl=b.dataset.tpl; $$("[data-tpl]").forEach(function(x){ x.setAttribute("aria-pressed", String(x===b)) }) } });
+      var urlsBox=$("#npUrls");
+      $(".npimport").ontoggle=function(){ store("studio.importOpen", this.open?"1":"0") };
+      urlsBox.oninput=function(){ var n=urlsBox.value.split("\n").filter(function(x){return x.trim()}).length; $("#npGo").textContent=n?"Import "+n+" page"+(n===1?"":"s"):"Create page" };
       $("#pageForm").onsubmit=function(e){ e.preventDefault();
-        api("POST","pages",{site_id:site.id, title:$("#npTitle").value, template:newTpl}).then(function(r){ toast("Page created"); go("#/sites/"+site.id+"/pages/"+r.page.id) }).catch(function(e){ toast(e.message,true) });
+        var urls=urlsBox.value.split("\n").map(function(x){return x.trim()}).filter(Boolean), btn=$("#npGo"), prog=$("#npProg");
+        if(!urls.length){
+          if(!$("#npTitle").value.trim()){ toast("Give the page a name.",true); $("#npTitle").focus(); return }
+          api("POST","pages",{site_id:site.id, title:$("#npTitle").value, template:newTpl}).then(function(r){ toast("Page created"); go("#/sites/"+site.id+"/pages/"+r.page.id) }).catch(function(e){ toast(e.message,true) });
+          return;
+        }
+        btn.disabled=true; var done=[], bad=[];
+        urls.reduce(function(ch,u,n){ return ch.then(function(){ prog.textContent="Importing "+(n+1)+" of "+urls.length+": "+u;
+          return importPage(site, u, urls.length===1?$("#npTitle").value.trim():"", $("#npCopy").checked, function(msg){ prog.textContent="Page "+(n+1)+" of "+urls.length+": "+msg })
+            .then(function(r){ done.push(r) }).catch(function(err){ bad.push(u+": "+err.message) }) }) }, Promise.resolve())
+        .then(function(){
+          var lost=done.reduce(function(a,r){return a+r.failed},0);
+          if(done.length) toast(done.length+" page"+(done.length===1?"":"s")+" imported as drafts"+(lost?". "+lost+" picture"+(lost===1?"":"s")+" couldn’t be copied and still point to the old site":""));
+          if(bad.length){ prog.innerHTML='<ul class="probs">'+bad.map(function(x){return '<li>'+esc(x)+'</li>'}).join("")+'</ul>'; btn.disabled=false; btn.textContent="Try again" }
+          if(done.length && !bad.length) go("#/sites/"+site.id+"/pages/"+done[done.length-1].page.id);
+          else if(done.length) api("GET","sites/"+site.id+"/pages").then(function(r){ pages.length=0; Array.prototype.push.apply(pages, r.pages); })
+        });
       };
     }
     $$("[data-pub]").forEach(function(b){ b.onclick=function(){
