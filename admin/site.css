@@ -54,7 +54,7 @@ h1{font-family:var(--f-display);font-stretch:125%;font-weight:800;font-size:clam
 /* signup */
 .signup{display:flex;flex-direction:column;gap:10px;max-width:600px}
 .signup .row{display:flex;flex-wrap:wrap;border:1px solid var(--rule)}
-.signup input[type=text],.signup input[type=email]{flex:1 1 170px;min-width:0;background:var(--field);color:var(--text);border:0;border-right:1px solid var(--line);padding:14px;font:inherit;font-size:16px}
+.signup .row input[type=text],.signup .row input[type=email]{flex:1 1 170px;min-width:0;background:var(--field);color:var(--text);border:0;border-right:1px solid var(--line);padding:14px;font:inherit;font-size:16px}
 .signup input:focus-visible{outline:2px solid var(--pc);outline-offset:-2px}
 .signup button{flex:1 0 auto;background:var(--text);color:var(--bg);border:0;padding:14px 22px;font:inherit;font-weight:600;cursor:pointer}
 .signup button:hover{background:var(--pc);color:var(--on-pc)}
