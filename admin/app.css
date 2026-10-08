@@ -606,3 +606,23 @@ a.t:hover{text-decoration:underline}
 .undo{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;background:var(--t1);color:var(--bg);padding:10px 12px 10px 18px;display:flex;gap:14px;align-items:center;box-shadow:0 8px 24px rgba(14,22,40,.2)}
 .undo .btn{background:var(--bg);color:var(--t1);border-color:var(--bg)}
 @media (max-width:1100px){.beditor{grid-template-columns:1fr}}
+
+/* ---------- site header, footer, domains, redirects ---------- */
+.nsec{gap:14px;padding:16px 18px 18px}
+.nrows{display:flex;flex-direction:column;gap:6px}
+.nrow{display:flex;gap:6px;align-items:center}
+.nrow input[type=text]{flex:1 1 0;min-width:0}
+.nrow > span{color:var(--t3)}
+.nbtn{font-size:12px}
+.nlink{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);background:var(--surface);padding:8px}
+.nlf{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.ncol .nlink{background:var(--surface)}
+.ncol{border:1px solid var(--line);background:var(--soft);padding:10px;display:flex;flex-direction:column;gap:8px}
+.ncol input[type=text]{min-width:0}
+.drows{display:flex;flex-direction:column;border:1px solid var(--line);background:var(--surface)}
+.drow{padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.drow+.drow{border-top:1px solid var(--line)}
+.dtop{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.dtop b{font-weight:600;font-size:14px;overflow-wrap:anywhere}
+.dbot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.drow .chip{text-transform:none}

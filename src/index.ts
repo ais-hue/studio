@@ -1,7 +1,7 @@
 import { Env, HttpError, json } from "./util";
 import { authEmail } from "./auth";
 import { handleApi } from "./api";
-import { handlePublic, serveStatic } from "./public";
+import { handleCustomHost, handlePublic, serveStatic } from "./public";
 import { runScheduled } from "./email";
 import { ALTERS, SCHEMA } from "./schema";
 import { handleAuth } from "./login";
@@ -84,8 +84,12 @@ export default {
       if (host.endsWith("." + root)) {
         const sub = host.slice(0, -(root.length + 1));
         if (!sub.includes(".")) return await handlePublic(req, env, ctx, host, sub);
+        return new Response("Not found", { status: 404 });
       }
-      return new Response("Not found", { status: 404 });
+      // A site's own domain (ciunas.app). Needs a Worker route on that domain's Cloudflare zone.
+      const custom = await handleCustomHost(req, env, ctx, host);
+      if (custom) return custom;
+      return new Response("This domain isn’t connected to a Studio site yet.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       console.error(e);

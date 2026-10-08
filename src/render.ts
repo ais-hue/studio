@@ -1,9 +1,11 @@
 import { formCss, renderFields } from "./forms";
 import { accentOf, esc, markdown } from "./util";
 import { BlocksContent, parseBlocks, renderBlocks } from "./blocks";
+import { parseNav, renderFooter, renderHeader } from "./sitekit";
 
 export interface Site {
   id: string; name: string; subdomain: string; accent: string; theme: string; status: string; tagline: string;
+  nav?: string;           // header links, logo and footer as JSON (src/sitekit.ts)
 }
 export interface Page {
   id: string; site_id: string; slug: string; title: string; template: string;
@@ -27,6 +29,8 @@ export interface RenderOpts {
   form?: import("./forms").PublicForm | null;  // a custom form chosen for this page
   root?: string;          // ROOT_DOMAIN: tracked links and resized images on block pages
   resize?: boolean;       // Cloudflare image transformations are on, so block pages can serve resized images
+  canonical?: string;     // the page's address on the site's main domain
+  path?: string;          // the path being shown, so the header can mark the current page
 }
 
 const fmtDate = (ms: number) =>
@@ -35,15 +39,15 @@ const fmtDate = (ms: number) =>
 function shell(site: Site, title: string, desc: string, body: string, o: RenderOpts, bodyClass = "", current = "", image = ""): string {
   const [light, dark] = accentOf(site.accent);
   const theme = ["light", "dark"].includes(site.theme) ? site.theme : "auto";
-  const nav = `<header class="nav"><a class="mark" href="/"><i aria-hidden="true"></i>${esc(site.name)}</a>${
-    o.hasBlog ? `<nav aria-label="Site"><a href="/"${current === "home" ? ' aria-current="page"' : ""}>Home</a><a href="/blog"${current === "blog" ? ' aria-current="page"' : ""}>Journal</a></nav>` : ""
-  }</header>`;
-  const foot = `<footer><span>© ${new Date().getFullYear()} ${esc(site.name)}</span><span>${esc(o.host)}</span></footer>`;
+  const sn = parseNav(site.nav);
+  const nav = renderHeader({ name: site.name, nav: sn, hasBlog: o.hasBlog, current, path: o.path || "/" });
+  const foot = renderFooter({ name: site.name, nav: sn, host: o.host });
   return `<!doctype html><html lang="en" data-theme="${theme}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${esc(title)}</title>
 ${desc ? `<meta name="description" content="${esc(desc)}"><meta property="og:description" content="${esc(desc)}">` : ""}
 <meta property="og:title" content="${esc(title)}">
+${o.canonical && !o.preview ? `<link rel="canonical" href="${esc(o.canonical)}"><meta property="og:url" content="${esc(o.canonical)}">` : ""}
 ${image ? `<meta property="og:image" content="${esc(image)}"><meta name="twitter:card" content="summary_large_image">` : ""}
 ${o.preview ? `<meta name="robots" content="noindex">` : ""}
 <link rel="preload" href="/__proof/fonts/archivo-wdth.woff2" as="font" type="font/woff2" crossorigin>

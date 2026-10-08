@@ -56,6 +56,9 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS social_deliveries ( id TEXT PRIMARY KEY, post_id TEXT NOT NULL, account_id TEXT NOT NULL, platform TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', step TEXT NOT NULL DEFAULT 'start', data TEXT NOT NULL DEFAULT '{}', attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, locked_until INTEGER NOT NULL DEFAULT 0, external_id TEXT, url TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS idx_deliveries_due ON social_deliveries(status, next_at)",
  "CREATE INDEX IF NOT EXISTS idx_deliveries_post ON social_deliveries(post_id)",
+ "CREATE TABLE IF NOT EXISTS domains ( hostname TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE, redirect_to TEXT, is_primary INTEGER NOT NULL DEFAULT 0, workspace_id TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS domains_site ON domains(site_id)",
+ "CREATE TABLE IF NOT EXISTS redirects ( site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE, from_path TEXT NOT NULL, to_url TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL, PRIMARY KEY (site_id, from_path) )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -86,4 +89,5 @@ export const ALTERS: string[] = [
  "ALTER TABLE social_posts ADD COLUMN zernio_status TEXT",
  "ALTER TABLE social_posts ADD COLUMN zernio_results TEXT",
  "ALTER TABLE pages ADD COLUMN previous TEXT",
+ "ALTER TABLE sites ADD COLUMN nav TEXT NOT NULL DEFAULT '{}'",
 ];

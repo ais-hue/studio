@@ -5,6 +5,7 @@ import { exitAll, onCampaignClick, onListJoin, runSequences } from "./automation
 import { handleResendWebhook } from "./hooks";
 import { followLink } from "./links";
 import { formToObject, handleFormPublic, loadForm, submitForm } from "./forms";
+import { domainFor, findRedirect, primaryHost } from "./sitekit";
 
 export async function serveStatic(req: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(req.url);
@@ -118,7 +119,7 @@ async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: st
   const page = await env.DB.prepare("SELECT * FROM pages WHERE id = ?").bind(pageId).first<Page>();
   if (!page) return reply(404, { error: "This form has been taken down." });
   const site = await env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(page.site_id).first<Site>();
-  if (!site || `${site.subdomain}.${env.ROOT_DOMAIN}` !== host) return reply(400, { error: "This form belongs to a different site." });
+  if (!site || !(await servesSite(env, host, site))) return reply(400, { error: "This form belongs to a different site." });
   const back = new URL(req.headers.get("referer") || `https://${host}/`);
 
   // A custom form placed on the page.
@@ -223,26 +224,75 @@ async function handleGo(req: Request, env: Env, ctx: ExecutionContext, url: URL,
   return html(renderNotice(null, "Nothing here", "This address only handles email links.", o), 404);
 }
 
-export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext, host: string, sub: string): Promise<Response> {
-  const url = new URL(req.url);
+/** Whether this hostname serves the site: its aisling.online address or one of its own domains. */
+async function servesSite(env: Env, host: string, site: Site): Promise<boolean> {
+  if (`${site.subdomain}.${env.ROOT_DOMAIN}` === host) return true;
+  const d = await domainFor(env, host);
+  return !!d && d.site_id === site.id && !d.redirect_to;
+}
+
+/** Paths every site host answers the same way. */
+async function common(req: Request, env: Env, ctx: ExecutionContext, host: string, url: URL): Promise<Response | null> {
   const p = url.pathname;
   if (p === "/__proof/site.css") return serveStatic(req, env, "/site.css");
   if (p.startsWith("/__proof/fonts/")) return serveStatic(req, env, p.replace("/__proof", ""));
-  if (p === "/robots.txt") return new Response("User-agent: *\nAllow: /\n", { headers: { "content-type": "text/plain" } });
-
-  const settings = await getSettings(env);
-  const base: RenderOpts = { host, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", consentText: settings.consent_text, hasBlog: false };
-
-  if (sub === "go") return handleGo(req, env, ctx, url, base);
   if (p === "/__proof/subscribe" && req.method === "POST") return subscribe(req, env, ctx, host);
+  return null;
+}
 
+async function baseOpts(env: Env, host: string): Promise<RenderOpts> {
+  const settings = await getSettings(env);
+  return { host, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", consentText: settings.consent_text, hasBlog: false };
+}
+
+export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext, host: string, sub: string): Promise<Response> {
+  const url = new URL(req.url);
+  const base = await baseOpts(env, host);
+  if (sub === "go") return handleGo(req, env, ctx, url, base);
+  const c = await common(req, env, ctx, host, url);
+  if (c) return c;
   const site = await env.DB.prepare("SELECT * FROM sites WHERE subdomain = ?").bind(sub).first<Site>();
+  if (!site) {
+    if (url.pathname === "/robots.txt") return new Response("User-agent: *\nAllow: /\n", { headers: { "content-type": "text/plain" } });
+    return html(renderNotice(null, "Not here yet", "There’s nothing at this address yet.", base, "404"), 404);
+  }
+  // Once a site has a main domain, its aisling.online address sends visitors (and search engines) there.
+  const primary = await primaryHost(env, site.id);
+  if (primary && url.pathname !== "/robots.txt") return Response.redirect(`https://${primary}${url.pathname}${url.search}`, 301);
+  return serveSite(req, env, ctx, url, host, site, base, primary);
+}
+
+/** A request on one of the sites' own domains. Null when the hostname isn't connected to any site. */
+export async function handleCustomHost(req: Request, env: Env, ctx: ExecutionContext, host: string): Promise<Response | null> {
+  const d = await domainFor(env, host);
+  if (!d) return null;
+  const url = new URL(req.url);
+  if (d.redirect_to) return Response.redirect(`https://${d.redirect_to}${url.pathname}${url.search}`, 301);
+  // Lets Studio check, from the browser, that the domain reaches this site.
+  if (url.pathname === "/__studio/ping") return new Response(JSON.stringify({ site: d.site_id }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" } });
+  const c = await common(req, env, ctx, host, url);
+  if (c) return c;
+  const site = await env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(d.site_id).first<Site>();
+  const base = await baseOpts(env, host);
   if (!site) return html(renderNotice(null, "Not here yet", "There’s nothing at this address yet.", base, "404"), 404);
+  return serveSite(req, env, ctx, url, host, site, base, (await primaryHost(env, site.id)) || host);
+}
+
+async function serveSite(req: Request, env: Env, ctx: ExecutionContext, url: URL, host: string, site: Site, base: RenderOpts, canonicalHost: string | null): Promise<Response> {
+  const p = url.pathname;
+  const canonHost = canonicalHost || host;
+  if (p === "/robots.txt") return new Response(`User-agent: *\nAllow: /\nSitemap: https://${canonHost}/sitemap.xml\n`, { headers: { "content-type": "text/plain" } });
+  if (p === "/sitemap.xml") {
+    const { results } = await env.DB.prepare("SELECT slug, updated_at FROM pages WHERE site_id = ? AND published = 1 ORDER BY slug").bind(site.id).all<{ slug: string; updated_at: number }>();
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${results.map((r) =>
+      `<url><loc>https://${esc(canonHost)}/${esc(r.slug)}</loc><lastmod>${new Date(r.updated_at).toISOString().slice(0, 10)}</lastmod></url>`).join("")}</urlset>`;
+    return new Response(xml, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" } });
+  }
   if (site.status === "paused") return html(renderNotice(site, "Back soon", `${esc(site.name)} is taking a short break.`, base), 503);
 
   const posts = (await env.DB.prepare("SELECT * FROM pages WHERE site_id = ? AND template = 'post' AND published = 1 ORDER BY created_at DESC")
     .bind(site.id).all<Page>()).results;
-  const o: RenderOpts = { ...base, hasBlog: posts.length > 0, joined: url.searchParams.get("joined") === "1" };
+  const o: RenderOpts = { ...base, hasBlog: posts.length > 0, joined: url.searchParams.get("joined") === "1", path: p.replace(/\/+$/, "") || "/" };
 
   if (p === "/blog" || p === "/blog/") {
     if (!posts.length) return html(renderNotice(site, "Not found", "There’s no page at this address.", o, "404"), 404);
@@ -250,6 +300,12 @@ export async function handlePublic(req: Request, env: Env, ctx: ExecutionContext
   }
   const slug = decodeURIComponent(p.replace(/^\/+|\/+$/g, ""));
   const page = await env.DB.prepare("SELECT * FROM pages WHERE site_id = ? AND slug = ? AND published = 1").bind(site.id, slug).first<Page>();
+  if (!page && slug) {
+    const to = await findRedirect(env, site.id, p);
+    // Paths on the site keep the visitor's query string; links elsewhere are used exactly as written.
+    if (to) return new Response(null, { status: 301, headers: { location: to.startsWith("/") && !to.includes("?") ? to + url.search : to, "cache-control": "public, max-age=3600" } });
+  }
+  o.canonical = page ? `https://${canonHost}/${page.slug}` : undefined;
   if (!page) {
     if (!slug) {
       return html(renderNotice(site, site.name, "This site is being built. Come back soon.", o), 200);

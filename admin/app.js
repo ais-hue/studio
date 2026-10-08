@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610080400";
+var VERSION = "202610081400";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -299,7 +299,7 @@ function blankBlock(type){
 }
 /** One line that tells blocks apart in the list. */
 function blockSummary(b){
-  var t = b.headline || b.heading || b.text || b.caption || b.label || (b.type==="signup"&&b.cta?"Button: "+b.cta:"") || (b.md||"").replace(/[#*_>\[\]()`-]/g," ").trim() ||
+  var t = b.headline || b.heading || b.text || b.caption || b.label || (b.type==="signup"&&b.cta?"Button: "+b.cta:"") || (b.type==="gallery"&&b.items&&b.items.length?b.items.length+" screenshot"+(b.items.length===1?"":"s"):"") || (b.md||"").replace(/[#*_>\[\]()`-]/g," ").trim() ||
     (b.items&&b.items[0]&&(b.items[0].title||b.items[0].q||b.items[0].label)) || (b.type==="store"?[b.apple?"App Store":"",b.google?"Google Play":""].filter(Boolean).join(" + "):"") || "";
   return String(t).replace(/\s+/g," ").slice(0,70);
 }
@@ -598,6 +598,106 @@ function sitePages(site, pages, pageId){
   render(false);
 }
 
+/* ============ site header, footer, domains, redirects (Site settings) ============ */
+function parseSiteNav(site){ var n={}; try{ n=JSON.parse(site.nav||"{}") }catch(e){}
+  n.header=n.header||[]; n.footer=n.footer||{}; n.footer.columns=n.footer.columns||[]; n.footer.social=n.footer.social||[]; return n }
+function navEditor(host, site, onChange){
+  var nav=parseSiteNav(site);
+  function get(path){ return path.split(".").reduce(function(o,k){ return o==null?undefined:o[k] }, nav) }
+  function setv(path,v){ var ks=path.split("."), o=nav; for(var i=0;i<ks.length-1;i++) o=o[ks[i]]; o[ks[ks.length-1]]=v }
+  function rowsOf(path, max, withStyle, addLabel){
+    var list=get(path)||[];
+    return '<div class="nrows">'+list.map(function(l,i){ var p=path+"."+i;
+      return '<div class="nlink"><div class="nlf"><input type="text" data-nav="'+p+'.label" maxlength="40" placeholder="Words" aria-label="Link words" value="'+esc(l.label||"")+'">'+
+        '<input type="text" data-nav="'+p+'.url" maxlength="1000" placeholder="Goes to: /page or https://…" aria-label="Goes to" value="'+esc(l.url||"")+'">'+
+        (withStyle?'<label class="check nbtn"><input type="checkbox" data-navbtn="'+p+'"'+(l.style==="button"?" checked":"")+'> Show as a button</label>':'')+'</div>'+
+        '<div class="browtools"><button type="button" class="ico" data-navup="'+p+'" aria-label="Move up"'+(i===0?" disabled":"")+'>↑</button><button type="button" class="ico" data-navdel="'+p+'" aria-label="Remove">✕</button></div></div>' }).join("")+
+      (list.length<max?'<button type="button" class="btn sm" data-navadd="'+path+'">'+esc(addLabel)+'</button>':'')+'</div>' }
+  function draw(){
+    var logo=nav.logo||"";
+    host.innerHTML='<h2 class="sec">Header</h2><div class="stack nsec">'+
+      '<div class="field"><span class="label">Logo</span><div class="bimgrow">'+(logo?'<img src="'+esc(logo)+'" alt="" style="object-fit:contain">':'<span class="bimgnone">Name</span>')+'<div class="actions">'+(S.me.files?'<button type="button" class="btn sm" id="nLogo">'+(logo?"Change":"Choose")+'</button>':'')+(logo?'<button type="button" class="btn sm ghost" id="nLogoX">Remove</button>':'')+'</div></div><span class="hint">Shown at the top left instead of the site’s name.</span></div>'+
+      '<div class="field"><span class="label">Links</span>'+rowsOf("header",6,true,"Add a link")+'<span class="hint">Shown at the top right of every page. Make one a button to stand out, like “Get the app”.</span></div></div>'+
+      '<h2 class="sec">Footer</h2><div class="stack nsec">'+
+      '<div class="field"><label for="nTag">Line under the name</label><input type="text" id="nTag" data-nav="footer.tagline" maxlength="200" value="'+esc(nav.footer.tagline||"")+'" placeholder="e.g. A quiet space for mindful apps."></div>'+
+      nav.footer.columns.map(function(c,i){ return '<div class="ncol"><div class="actions" style="justify-content:space-between;flex-wrap:nowrap"><input type="text" data-nav="footer.columns.'+i+'.heading" maxlength="40" placeholder="Column heading" aria-label="Column heading" value="'+esc(c.heading||"")+'"><button type="button" class="btn sm ghost danger" data-navdel="footer.columns.'+i+'">Remove column</button></div>'+rowsOf("footer.columns."+i+".links",8,false,"Add a link")+'</div>' }).join("")+
+      (nav.footer.columns.length<4?'<button type="button" class="btn sm" data-navaddcol style="align-self:flex-start">Add a column</button>':'')+
+      '<div class="field"><span class="label">Social links</span>'+rowsOf("footer.social",6,false,"Add a social link")+'</div></div>';
+    wire();
+  }
+  function wire(){
+    $$("[data-nav]",host).forEach(function(el){ el.oninput=function(){ setv(el.dataset.nav, el.value); onChange(nav) } });
+    $$("[data-navbtn]",host).forEach(function(el){ el.onchange=function(){ setv(el.dataset.navbtn+".style", el.checked?"button":"link"); onChange(nav) } });
+    $$("[data-navadd]",host).forEach(function(b){ b.onclick=function(){ get(b.dataset.navadd).push({label:"",url:""}); draw(); var ins=$$('[data-nav^="'+b.dataset.navadd+'."]',host); if(ins.length) ins[ins.length-2].focus() } });
+    $$("[data-navaddcol]",host).forEach(function(b){ b.onclick=function(){ nav.footer.columns.push({heading:"",links:[{label:"",url:""}]}); draw() } });
+    $$("[data-navdel]",host).forEach(function(b){ b.onclick=function(){ var ks=b.dataset.navdel.split("."), i=+ks.pop(); get(ks.join(".")).splice(i,1); draw(); onChange(nav) } });
+    $$("[data-navup]",host).forEach(function(b){ b.onclick=function(){ var ks=b.dataset.navup.split("."), i=+ks.pop(), a=get(ks.join(".")); if(i<1) return; var t=a[i]; a[i]=a[i-1]; a[i-1]=t; draw(); onChange(nav) } });
+    var lb=$("#nLogo",host); if(lb) lb.onclick=function(){ pickFromLibrary({kind:"image"}).then(function(fs){ if(!fs.length) return; nav.logo=fs[0].url; draw(); onChange(nav) }) };
+    var lx=$("#nLogoX",host); if(lx) lx.onclick=function(){ delete nav.logo; draw(); onChange(nav) };
+  }
+  draw();
+  return nav;
+}
+
+function domainsEditor(host, site){
+  var domains=[], status={};
+  function check(d){
+    if(d.redirect_to||status[d.hostname]) return;
+    status[d.hostname]="checking";
+    var ctl=new AbortController(), t=setTimeout(function(){ ctl.abort() },5000);
+    fetch("https://"+d.hostname+"/__studio/ping",{signal:ctl.signal, cache:"no-store"}).then(function(r){ return r.json() })
+      .then(function(j){ status[d.hostname]= j.site===site.id ? "ok" : "other" }).catch(function(){ status[d.hostname]="no" })
+      .then(function(){ clearTimeout(t); draw() });
+  }
+  function chip(d){
+    if(d.redirect_to) return '<span class="chip draft">Sends visitors to '+esc(d.redirect_to)+'</span>';
+    var st=status[d.hostname];
+    return st==="ok"?'<span class="chip published">Connected</span>':st==="checking"?'<span class="chip draft">Checking…</span>':st==="other"?'<span class="chip failed">Shows another site</span>':'<span class="chip off">Not pointing here yet</span>';
+  }
+  function draw(){
+    var primary=domains.filter(function(d){return d.is_primary})[0];
+    host.innerHTML='<h2 class="sec">Domains</h2><div class="stack nsec">'+
+      (domains.length?'<div class="drows">'+domains.map(function(d){
+        var canMain=!d.redirect_to && (d.is_primary || status[d.hostname]==="ok");
+        return '<div class="drow"><div class="dtop"><b>'+esc(d.hostname)+'</b>'+(d.redirect_to?'':'<button type="button" class="ico" data-ddel="'+esc(d.hostname)+'" aria-label="Remove '+esc(d.hostname)+'">✕</button>')+'</div>'+
+          '<div class="dbot">'+chip(d)+(!d.redirect_to?'<button type="button" class="btn sm'+(d.is_primary?'':' ghost')+'" data-dmain="'+esc(d.hostname)+'"'+(canMain?'':' disabled title="Connect the domain first"')+'>'+(d.is_primary?'Main address ✓':'Make main address')+'</button>':'')+'</div></div>' }).join("")+'</div>':'')+
+      '<div id="dConfirm"></div>'+
+      '<div class="actions" style="flex-wrap:nowrap"><label class="sr" for="dHost">Domain</label><input type="text" id="dHost" placeholder="e.g. ciunas.app" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn sm" type="button" id="dAdd">Add domain</button></div>'+
+      '<p class="hint" style="margin:0">'+(primary?'Visitors to '+esc(hostOf(site))+' are sent to '+esc(primary.hostname)+'.':'Until a domain is the main address, the site stays at '+esc(hostOf(site))+'.')+' A domain needs to be on Cloudflare, in the same account as '+esc(S.me.root)+', with a Worker route to Studio. Ask Claude to add the route once it’s there.</p></div>';
+    // A plain button and Enter key: this sits inside the settings form, and forms can't be nested.
+    var add=function(){ var v=$("#dHost",host).value; if(!v.trim()) return;
+      api("POST","sites/"+site.id+"/domains",{hostname:v}).then(function(r){ domains=r.domains; status={}; draw(); domains.forEach(check); toast("Domain added") }).catch(function(err){ toast(err.message,true) }) };
+    $("#dAdd",host).onclick=add;
+    $("#dHost",host).onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); add() } };
+    $$("[data-ddel]",host).forEach(function(b){ b.onclick=function(){ var h=b.dataset.ddel;
+      $("#dConfirm",host).innerHTML='<div class="confirm"><span>Remove '+esc(h)+' from this site? Visitors there will see “not connected”.</span><button class="btn sm danger" type="button" id="dY">Remove</button><button class="btn sm ghost" type="button" id="dN">Keep it</button></div>';
+      $("#dN",host).onclick=function(){ $("#dConfirm",host).innerHTML="" };
+      $("#dY",host).onclick=function(){ api("DELETE","domains/"+encodeURIComponent(h)).then(function(r){ domains=r.domains; draw() }).catch(function(err){ toast(err.message,true) }) } } });
+    $$("[data-dmain]",host).forEach(function(b){ b.onclick=function(){ var h=b.dataset.dmain, d=domains.filter(function(x){return x.hostname===h})[0], on=!d.is_primary;
+      $("#dConfirm",host).innerHTML='<div class="confirm"><span>'+(on?'Make '+esc(h)+' the main address? Anyone visiting '+esc(hostOf(site))+' will be sent there, and search engines will list '+esc(h)+'.':'Stop using '+esc(h)+' as the main address? '+esc(hostOf(site))+' will show the site again.')+'</span><button class="btn sm primary" type="button" id="dY">'+(on?'Make it main':'Stop')+'</button><button class="btn sm ghost" type="button" id="dN">Not yet</button></div>';
+      $("#dN",host).onclick=function(){ $("#dConfirm",host).innerHTML="" };
+      $("#dY",host).onclick=function(){ api("PATCH","domains/"+encodeURIComponent(h),{primary:on}).then(function(r){ domains=r.domains; draw(); toast(on?h+" is the main address":"Main address cleared") }).catch(function(err){ toast(err.message,true) }) } } });
+  }
+  api("GET","sites/"+site.id+"/domains").then(function(r){ domains=r.domains; draw(); domains.forEach(check) })
+    .catch(function(e){ if(window.console) console.error(e); host.innerHTML='<h2 class="sec">Domains</h2><div class="nsec"><p class="hint" style="margin:0">Couldn’t load domains: '+esc(e.message)+'</p></div>' });
+}
+
+function redirectsEditor(host, site){
+  var list=[];
+  var save=saver(null, function(){ return api("PUT","sites/"+site.id+"/redirects",{redirects:list}) });
+  function draw(){
+    host.innerHTML='<h2 class="sec">Redirects</h2><div class="stack nsec"><p class="hint" style="margin:0">Send old addresses somewhere new, for links that are already out in the world.</p>'+
+      '<div class="nrows">'+list.map(function(r,i){ return '<div class="nrow"><input type="text" data-rf="'+i+'" placeholder="/old-address" aria-label="Old address" value="'+esc(r.from_path)+'"><span aria-hidden="true">→</span><input type="text" data-rt="'+i+'" placeholder="/new-address or https://…" aria-label="Goes to" value="'+esc(r.to_url)+'"><button type="button" class="ico" data-rdel="'+i+'" aria-label="Remove">✕</button></div>' }).join("")+
+      '<button type="button" class="btn sm" id="rAdd">Add a redirect</button></div></div>';
+    $$("[data-rf]",host).forEach(function(el){ el.oninput=function(){ list[+el.dataset.rf].from_path=el.value; save({}) } });
+    $$("[data-rt]",host).forEach(function(el){ el.oninput=function(){ list[+el.dataset.rt].to_url=el.value; save({}) } });
+    $$("[data-rdel]",host).forEach(function(b){ b.onclick=function(){ list.splice(+b.dataset.rdel,1); draw(); save({}); save.now() } });
+    $("#rAdd",host).onclick=function(){ list.push({from_path:"",to_url:""}); draw(); var ins=$$("[data-rf]",host); ins[ins.length-1].focus() };
+  }
+  api("GET","sites/"+site.id+"/redirects").then(function(r){ list=r.redirects; draw() })
+    .catch(function(e){ if(window.console) console.error(e); host.innerHTML='<h2 class="sec">Redirects</h2><div class="nsec"><p class="hint" style="margin:0">Couldn’t load redirects: '+esc(e.message)+'</p></div>' });
+}
+
 function siteSettings(site){
   var b=$("#tabBody");
   b.innerHTML='<div class="editor"><form class="form panel" id="ssForm" autocomplete="off"><h2 class="sec">Site settings <span class="saving" id="ssSave">Saved</span></h2>'+
@@ -606,15 +706,20 @@ function siteSettings(site){
     '<div class="field"><label for="ssTag">Tagline</label><input type="text" id="ssTag" maxlength="120" value="'+esc(site.tagline)+'"><span class="hint">Used in the browser tab and link previews.</span></div>'+
     '<div class="field"><span class="label">Colour</span>'+swatches(site.accent,"acc")+'</div>'+
     '<div class="field"><span class="label">Theme</span><div class="seg" role="group" aria-label="Theme" style="align-self:flex-start">'+[["auto","Follow visitor"],["light","Light"],["dark","Dark"]].map(function(t){ return '<button type="button" data-th="'+t[0]+'" aria-pressed="'+(site.theme===t[0])+'">'+t[1]+'</button>' }).join("")+'</div></div>'+
+    '<div id="navHost"></div><div id="domHost"></div><div id="redHost"></div>'+
     '<h2 class="sec">Delete site</h2><p class="hint">Removes the site and all its pages. Contacts and emails stay.</p><div class="actions"><button type="button" class="btn sm danger" id="delSite">Delete '+esc(site.name)+'</button></div><div id="delConfirm"></div>'+
     '</form><div class="proof"><div class="proofbar"><span class="url">home page</span></div><iframe id="pv" title="Site preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
   var save=saver($("#ssSave"), function(d){ return api("PATCH","sites/"+site.id,d).then(function(r){ refreshNav(); Object.assign(site, r.site); var sub=$("#ssSub"); if(document.activeElement!==sub) sub.value=r.site.subdomain; $("#view").style.setProperty("--pc","var(--"+r.site.accent+")"); preview() }) });
   function preview(){
     api("GET","sites/"+site.id+"/pages").then(function(r){
       var home=r.pages.filter(function(p){return p.slug===""})[0]; if(!home) return;
-      return api("POST","preview",{ site_id:site.id, site:{name:site.name, accent:site.accent, theme:site.theme}, page:{ id:home.id, slug:"", title:home.title, template:home.template, content:JSON.parse(home.content||"{}") } });
+      return api("POST","preview",{ site_id:site.id, site:{name:site.name, accent:site.accent, theme:site.theme, nav:navModel}, page:{ id:home.id, slug:"", title:home.title, template:home.template, content:JSON.parse(home.content||"{}") } });
     }).then(function(html){ if(html && $("#pv")) $("#pv").srcdoc=html }).catch(function(){});
   }
+  var navModel=null, pvT;
+  navModel=navEditor($("#navHost"), site, function(n){ save({nav:JSON.parse(JSON.stringify(n))}); clearTimeout(pvT); pvT=setTimeout(preview,400) });
+  domainsEditor($("#domHost"), site);
+  redirectsEditor($("#redHost"), site);
   $("#ssName").oninput=function(){ site.name=this.value; save({name:this.value}) };
   $("#ssSub").oninput=function(){ save({subdomain:this.value}) };
   $("#ssTag").oninput=function(){ save({tagline:this.value}) };
