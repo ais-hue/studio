@@ -34,7 +34,7 @@ export interface Block {
   // divider
   style?: "space" | "rule";
 }
-export interface BlocksContent { blocks: Block[]; description?: string; share_image?: string; form_id?: string }
+export interface BlocksContent { blocks: Block[]; description?: string; share_image?: string; form_id?: string; brand?: string }
 
 const s = (v: unknown, max: number) => String(v ?? "").replace(/\r\n?/g, "\n").slice(0, max).trim();
 const pick = <T extends string>(v: unknown, opts: readonly T[], d: T): T => (opts.includes(v as T) ? (v as T) : d);
@@ -43,6 +43,11 @@ export const safeHref = (u: unknown) => { const x = s(u, 1000); return /^(https:
 /** Media must be https so it never breaks the page's security. */
 const safeMedia = (u: unknown) => { const x = s(u, 1000); return /^https:\/\//i.test(x) ? x : ""; };
 const bid = (v: unknown) => { const x = String(v ?? "").replace(/[^a-z0-9_-]/gi, "").slice(0, 24); return x || "b" + Math.random().toString(36).slice(2, 10); };
+
+const SECTIONED: BlockType[] = ["cards", "features", "faq", "signup", "store", "links", "quote"];
+
+/** Headings may mark a word for emphasis with *asterisks*, shown in the brand's emphasis style. */
+export const emph = (t: string) => esc(t).replace(/\*([^*\n]{1,80})\*/g, "<em>$1</em>");
 
 /** Validate and trim whatever the editor (or Claude) sends. Unknown fields and types are dropped. */
 export function cleanBlocks(input: any): BlocksContent {
@@ -57,6 +62,11 @@ export function cleanBlocks(input: any): BlocksContent {
     seen.add(id);
     const b: Block = { id, type, bg: pick(r.bg, ["page", "soft", "accent"] as const, "page"), space: pick(r.space, ["tight", "normal", "airy"] as const, "normal") };
     if (r.hidden) b.hidden = true;
+    // Section blocks can carry a small label above their heading, and be centred.
+    if (SECTIONED.includes(type)) {
+      const eb = s(r.eyebrow, 80); if (eb) b.eyebrow = eb;
+      if (r.align === "center") b.align = "center";
+    }
     switch (type) {
       case "hero":
         b.eyebrow = s(r.eyebrow, 80); b.headline = s(r.headline, 160); b.sub = s(r.sub, 400);
@@ -118,6 +128,8 @@ export function cleanBlocks(input: any): BlocksContent {
   const out: BlocksContent = { blocks };
   const desc = s(input?.description, 300); if (desc) out.description = desc;
   const share = safeMedia(input?.share_image); if (share) out.share_image = share;
+  // An app page on its parent brand's site wears the app brand's accents.
+  const app = s(input?.brand, 40).replace(/[^a-z0-9_]/gi, ""); if (app) out.brand = app;
   // The page's sign-up form comes from its first signup block, so public.ts can load it as before.
   const fid = blocks.find((b) => b.type === "signup" && b.form_id && !b.hidden)?.form_id;
   if (fid) out.form_id = fid;
@@ -193,7 +205,7 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
       const btns = (b.buttons || []).map((x) => `<a class="bk-btn${x.style === "plain" ? " plain" : ""}" href="${esc(x.url)}"${ext(x.url)}>${esc(x.label)}</a>`).join("");
       const media = b.image ? `<div class="bk-hero-media${b.image.frame === "phone" ? " phone" : ""}">${img(r, b.image.url, b.image.alt, "(min-width: 900px) 40vw, 90vw", "", tag === "h1")}</div>` : "";
       return `<div class="bk-hero${b.align === "center" ? " center" : ""}${media ? " has-media" : ""}"><div class="bk-hero-text">${b.eyebrow ? `<div class="eyebrow">${esc(b.eyebrow)}</div>` : ""}
-<${tag} class="bk-h">${esc(b.headline || r.title)}</${tag}>${b.sub ? `<p class="sub">${esc(b.sub)}</p>` : ""}${btns ? `<div class="bk-btns">${btns}</div>` : ""}</div>${media}</div>`;
+<${tag} class="bk-h">${emph(b.headline || r.title)}</${tag}>${b.sub ? `<p class="sub">${esc(b.sub)}</p>` : ""}${btns ? `<div class="bk-btns">${btns}</div>` : ""}</div>${media}</div>`;
     }
     case "text": return b.md ? `<div class="prose">${markdown(b.md)}</div>` : "";
     case "image":
@@ -209,12 +221,12 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
         `<a class="bk-store" href="${esc(track(r, href, code))}" rel="noopener" data-platform="${platform}"><small>${small}</small><b>${big}</b></a>`;
       const btns = (b.apple ? btn(b.apple, b.apple_code, "Download on the", "App Store", "ios") : "") + (b.google ? btn(b.google, b.google_code, "Get it on", "Google Play", "android") : "");
       if (!btns) return "";
-      return `<div class="bk-storewrap">${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}<div class="bk-stores">${btns}</div>${b.note ? `<p class="bk-note">${esc(b.note)}</p>` : ""}</div>`;
+      return `<div class="bk-storewrap">${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}<div class="bk-stores">${btns}</div>${b.note ? `<p class="bk-note">${esc(b.note)}</p>` : ""}</div>`;
     }
     case "features": {
       const items = (b.items || []) as Array<{ title: string; text: string }>;
       if (!items.length) return "";
-      return `${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}<ul class="points bk-features">${items.map((x) => `<li>${x.title ? `<b>${esc(x.title)}</b>` : ""}${x.text ? `<span>${esc(x.text)}</span>` : ""}</li>`).join("")}</ul>`;
+      return `${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}<ul class="points bk-features">${items.map((x) => `<li>${x.title ? `<b>${esc(x.title)}</b>` : ""}${x.text ? `<span>${esc(x.text)}</span>` : ""}</li>`).join("")}</ul>`;
     }
     case "quote":
       return b.text ? `<figure class="bk-quote"><blockquote>${esc(b.text)}</blockquote>${b.who ? `<figcaption>${esc(b.who)}</figcaption>` : ""}</figure>` : "";
@@ -222,14 +234,14 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
       const items = (b.items || []) as Array<{ q: string; a: string }>;
       if (!items.length) return "";
       const ld = JSON.stringify({ "@context": "https://schema.org", "@type": "FAQPage", mainEntity: items.map((x) => ({ "@type": "Question", name: x.q, acceptedAnswer: { "@type": "Answer", text: x.a } })) }).replace(/</g, "\\u003c");
-      return `${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}<div class="bk-faq">${items.map((x) => `<details><summary>${esc(x.q)}</summary><div class="prose">${markdown(x.a)}</div></details>`).join("")}</div><script type="application/ld+json">${ld}</script>`;
+      return `${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}<div class="bk-faq">${items.map((x) => `<details><summary>${esc(x.q)}</summary><div class="prose">${markdown(x.a)}</div></details>`).join("")}</div><script type="application/ld+json">${ld}</script>`;
     }
     case "signup":
-      return `<div class="bk-signup">${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}${b.text ? `<p class="sub">${esc(b.text)}</p>` : ""}${r.signup(b)}</div>`;
+      return `<div class="bk-signup">${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}${b.text ? `<p class="sub">${esc(b.text)}</p>` : ""}${r.signup(b)}</div>`;
     case "links": {
       const items = (b.items || []) as Array<{ label: string; url: string }>;
       if (!items.length) return "";
-      return `${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}<div class="linklist">${items.map((x) => `<a href="${esc(x.url)}"${ext(x.url)}>${esc(x.label)}</a>`).join("")}</div>`;
+      return `${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}<div class="linklist">${items.map((x) => `<a href="${esc(x.url)}"${ext(x.url)}>${esc(x.label)}</a>`).join("")}</div>`;
     }
     case "video": {
       if (!b.url) return "";
@@ -245,12 +257,12 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
       const pts = (b.points || []).length ? `<ul class="points bk-pts">${(b.points || []).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
       const media = b.image ? `<div class="bk-split-media${b.image.frame === "phone" ? " phone" : ""}">${img(r, b.image.url, b.image.alt, "(min-width: 860px) 40vw, 90vw")}</div>` : "";
       if (!b.heading && !b.md && !media) return "";
-      return `<div class="bk-split${media ? " has-media" : ""} img-${b.side || "right"}"><div class="bk-split-text">${b.eyebrow ? `<div class="eyebrow">${esc(b.eyebrow)}</div>` : ""}${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}${b.md ? `<div class="prose">${markdown(b.md)}</div>` : ""}${pts}${btns ? `<div class="bk-btns">${btns}</div>` : ""}</div>${media}</div>`;
+      return `<div class="bk-split${media ? " has-media" : ""} img-${b.side || "right"}"><div class="bk-split-text">${b.eyebrow ? `<div class="eyebrow">${esc(b.eyebrow)}</div>` : ""}${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}${b.md ? `<div class="prose">${markdown(b.md)}</div>` : ""}${pts}${btns ? `<div class="bk-btns">${btns}</div>` : ""}</div>${media}</div>`;
     }
     case "cards": {
       const items = (b.items || []) as Array<{ title: string; text: string; img: string; alt: string; url: string; link_text: string }>;
       if (!items.length) return "";
-      return `${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}${b.intro ? `<div class="prose bk-intro">${markdown(b.intro)}</div>` : ""}<div class="bk-cards cols-${b.columns || "3"}">${items.map((x) =>
+      return `${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}${b.intro ? `<div class="prose bk-intro">${markdown(b.intro)}</div>` : ""}<div class="bk-cards cols-${b.columns || "3"}">${items.map((x) =>
         `<article class="bk-card">${x.img ? `<div class="bk-cardimg">${img(r, x.img, x.alt, "(min-width: 860px) 300px, 90vw")}</div>` : ""}${x.title ? `<h3>${esc(x.title)}</h3>` : ""}${x.text ? `<div class="prose">${markdown(x.text)}</div>` : ""}${x.url ? `<a class="bk-cardlink" href="${esc(x.url)}"${ext(x.url)}>${esc(x.link_text || "Find out more")} <span aria-hidden="true">→</span></a>` : ""}</article>`).join("")}</div>`;
     }
   }
@@ -267,7 +279,9 @@ export function renderBlocks(content: BlocksContent, r: BlockRender): string {
     if (b.hidden) continue;
     const inner = block(b, r, first);
     if (!inner) continue;
-    out.push(`<section class="bk t-${b.type} bg-${b.bg || "page"} sp-${b.space || "normal"}" id="${esc(b.id)}">${inner}</section>`);
+    const label = b.type !== "hero" && b.type !== "split" && b.eyebrow ? `<div class="eyebrow">${esc(b.eyebrow)}</div>` : "";
+    const al = b.type !== "hero" && b.align === "center" ? " al-center" : "";
+    out.push(`<section class="bk t-${b.type} bg-${b.bg || "page"} sp-${b.space || "normal"}${al}" id="${esc(b.id)}">${label}${inner}</section>`);
   }
   return out.join("\n");
 }

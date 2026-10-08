@@ -13,6 +13,7 @@ import { cleanRules, compileRules, segmentWhere } from "./segments";
 import { performance, syncMetrics } from "./performance";
 import { getBrief, reviewQueue, saveBrief, tidyBatches } from "./producer";
 import { importUrl } from "./mcp";
+import { Brand, brandStyle, cleanKit, createBrand, effectiveKit, getBrand, parseKit, styleFor, updateBrand } from "./brandkit";
 import { Kind, createInitiative, deleteInitiative, initiativeDetail, listInitiatives, setInitiative, updateInitiative } from "./initiatives";
 import { FREE_BYTES, FileRow, fileUrl, finishBig, removeFile, startBig, uploadPart, uploadSmall, view as fileView } from "./files";
 import { appsStatus, saveApp, connectPassword } from "./direct/engine";
@@ -164,9 +165,10 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         status: SITE_STATUS.includes(d.status) ? d.status : s.status,
         tagline: d.tagline !== undefined ? str(d.tagline, 120) : s.tagline,
         nav: d.nav !== undefined ? JSON.stringify(cleanNav(d.nav)) : (s as any).nav || "{}",
+        brand_id: d.brand_id !== undefined ? (d.brand_id ? (await getBrand(env, str(d.brand_id, 40))).id : null) : (s.brand_id ?? null),
       };
-      await env.DB.prepare("UPDATE sites SET name = ?, subdomain = ?, accent = ?, theme = ?, status = ?, tagline = ?, nav = ? WHERE id = ?")
-        .bind(next.name, next.subdomain, next.accent, next.theme, next.status, next.tagline, next.nav, s.id).run();
+      await env.DB.prepare("UPDATE sites SET name = ?, subdomain = ?, accent = ?, theme = ?, status = ?, tagline = ?, nav = ?, brand_id = ? WHERE id = ?")
+        .bind(next.name, next.subdomain, next.accent, next.theme, next.status, next.tagline, next.nav, next.brand_id, s.id).run();
       return json({ site: await getSite(env, s.id) });
     }
     if (b && !c && m === "DELETE") {
@@ -197,6 +199,66 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   }
 
   /* ---------- pages ---------- */
+  /* Brands: the kit every site, page and template renders from (src/brandkit.ts). */
+  if (a === "brands") {
+    const shape = (x: Brand) => ({ ...x, kit: parseKit(x.kit) });
+    if (!b && m === "GET") {
+      const { results } = await env.DB.prepare(`SELECT b.*, (SELECT COUNT(*) FROM sites s WHERE s.brand_id = b.id) AS sites FROM brands b ORDER BY b.parent_id IS NOT NULL, b.name`).all<Brand & { sites: number }>();
+      const social = (await env.DB.prepare("SELECT id, name, brand_id FROM social_brands ORDER BY name").all()).results;
+      return json({ brands: results.map(shape), social });
+    }
+    if (!b && m === "POST") return json({ brand: shape(await createBrand(env, await body(req))) }, 201);
+    if (b && !c && m === "GET") {
+      const br = await getBrand(env, b);
+      return json({ brand: shape(br), inherited: br.parent_id ? await effectiveKit(env, br.parent_id) : {} });
+    }
+    if (b && !c && m === "PATCH") return json({ brand: shape(await updateBrand(env, b, await body(req))) });
+    if (b && !c && m === "DELETE") {
+      await getBrand(env, b);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE sites SET brand_id = NULL WHERE brand_id = ?").bind(b),
+        env.DB.prepare("UPDATE social_brands SET brand_id = NULL WHERE brand_id = ?").bind(b),
+        env.DB.prepare("UPDATE brands SET parent_id = NULL WHERE parent_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM brands WHERE id = ?").bind(b),
+      ]);
+      return json({ ok: true });
+    }
+    // Which social brand (accounts, posting times, Claude brief) belongs to this brand.
+    if (b && c === "social" && m === "PUT") {
+      await getBrand(env, b);
+      const sid = str((await body(req)).social_brand_id, 60);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE social_brands SET brand_id = NULL WHERE brand_id = ?").bind(b),
+        ...(sid ? [env.DB.prepare("UPDATE social_brands SET brand_id = ? WHERE id = ?").bind(b, sid)] : []),
+      ]);
+      return json({ ok: true });
+    }
+    // Live preview while editing: the brand's first site's home page (or a sample page) with the kit as typed.
+    if (b && c === "preview" && m === "POST") {
+      const br = await getBrand(env, b);
+      const d = await body(req);
+      const kit = { ...(br.parent_id ? await effectiveKit(env, br.parent_id) : {}), ...cleanKit(d.kit ?? parseKit(br.kit)) };
+      const ids = [br.id, br.parent_id].filter(Boolean);
+      let site = await env.DB.prepare(`SELECT * FROM sites WHERE brand_id IN (${ids.map(() => "?").join(",")}) ORDER BY brand_id = ? DESC, created_at LIMIT 1`).bind(...ids, br.id).first<Site>();
+      let page = site ? await env.DB.prepare("SELECT * FROM pages WHERE site_id = ? AND slug = '' ").bind(site.id).first<Page>() : null;
+      if (!site || !page) {
+        site = { id: "sample", name: br.name, subdomain: "sample", accent: "brass", theme: "auto", status: "live", tagline: kit.one_liner as string || "", nav: "{}" };
+        page = { id: "sample", site_id: "sample", slug: "", title: br.name, template: "blocks", published: 1, created_at: t, updated_at: t,
+          content: JSON.stringify(cleanBlocks({ blocks: [
+            { type: "hero", eyebrow: "A sample page", headline: `${br.name}, in its *own* style`, sub: String(kit.one_liner || "This is how pages, buttons and cards look with this brand kit."), buttons: [{ label: "Primary button", url: "#" }, { label: "Second button", url: "#", style: "plain" }] },
+            { type: "cards", eyebrow: "Cards", heading: "Three *things* to know", align: "center", items: [{ title: "First", text: "A short line of body text.", url: "#", link_text: "Read more" }, { title: "Second", text: "Another short line.", url: "#", link_text: "Read more" }, { title: "Third", text: "And one more.", url: "#", link_text: "Read more" }] },
+            { type: "split", bg: "accent", eyebrow: "Accent section", heading: "Something worth saying", md: "Body text on the accent colour.", buttons: [{ label: "Call to action", url: "#" }] },
+            { type: "faq", heading: "Questions", items: [{ q: "Is this a real page?", a: "No. It shows the kit until the brand has a site." }] },
+          ] })) };
+      }
+      const settings = await getSettings(env);
+      const app = page.template === "blocks" ? (() => { try { return JSON.parse(page!.content).brand; } catch { return null; } })() : null;
+      const k = app && app !== br.id ? { ...kit, ...Object.fromEntries(Object.entries(await effectiveKit(env, app)).filter(([key]) => ["accent", "on_accent", "accent2", "dark_accent", "dark_on_accent"].includes(key))) } : kit;
+      return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, preview: true, consentText: settings.consent_text, hasBlog: false, brand: Object.keys(k).length ? brandStyle(k, site.theme) : undefined }),
+        { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+  }
+
   if (a === "pages") {
     if (!b && m === "POST") {
       const d = await body(req);
@@ -295,7 +357,9 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     const settings = await getSettings(env);
     const hasBlog = !!(await env.DB.prepare("SELECT 1 FROM pages WHERE site_id = ? AND template = 'post' AND published = 1").bind(site.id).first());
     const pform = pg.content?.form_id ? await loadForm(env, String(pg.content.form_id)) : null;
-    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", preview: true, consentText: settings.consent_text, hasBlog, form: pform }),
+    if (d.site?.brand_id !== undefined) site.brand_id = d.site.brand_id || null;
+    const brand = await styleFor(env, site, page.template === "blocks" ? pg.content?.brand : null);
+    return new Response(renderPage(site, page, { host: `${site.subdomain}.${env.ROOT_DOMAIN}`, root: env.ROOT_DOMAIN, resize: env.IMAGE_TRANSFORMS === "1", preview: true, consentText: settings.consent_text, hasBlog, form: pform, brand }),
       { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 

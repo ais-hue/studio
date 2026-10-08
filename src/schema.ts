@@ -59,6 +59,8 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS domains ( hostname TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE, redirect_to TEXT, is_primary INTEGER NOT NULL DEFAULT 0, workspace_id TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS domains_site ON domains(site_id)",
  "CREATE TABLE IF NOT EXISTS redirects ( site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE, from_path TEXT NOT NULL, to_url TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL, PRIMARY KEY (site_id, from_path) )",
+ "CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT 'main', parent_id TEXT REFERENCES brands(id) ON DELETE SET NULL, name TEXT NOT NULL, kit TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+ "CREATE INDEX IF NOT EXISTS brands_parent ON brands(parent_id)",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",
@@ -90,4 +92,6 @@ export const ALTERS: string[] = [
  "ALTER TABLE social_posts ADD COLUMN zernio_results TEXT",
  "ALTER TABLE pages ADD COLUMN previous TEXT",
  "ALTER TABLE sites ADD COLUMN nav TEXT NOT NULL DEFAULT '{}'",
+ "ALTER TABLE sites ADD COLUMN brand_id TEXT",
+ "ALTER TABLE social_brands ADD COLUMN brand_id TEXT",
 ];

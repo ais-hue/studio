@@ -628,3 +628,26 @@ a.t:hover{text-decoration:underline}
 .drow .chip{text-transform:none}
 .npimport summary{cursor:pointer;font-size:13.5px;font-weight:500;color:var(--t2)}
 .npimport[open] summary{color:var(--t1)}
+
+/* brands */
+.brandlist{display:flex;flex-direction:column}
+.bcardlink{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);text-decoration:none;color:var(--t1)}
+.bcardlink:last-child{border-bottom:0}
+.bcardlink:hover{background:var(--bg)}
+.bcardlink.child{padding-left:46px}
+.bcardlink .t{display:flex;flex-direction:column;min-width:0}
+.bcardlink small{color:var(--t2);font-size:12px}
+.kitsw{display:inline-flex;flex:none;border:1px solid var(--line2)}
+.kitsw i{display:block;width:16px;height:26px}
+.kitsw:empty{width:32px;height:26px;background:repeating-linear-gradient(45deg,var(--line) 0 4px,transparent 4px 8px)}
+.kith{font-size:13px;margin:14px 0 2px;padding-top:12px;border-top:1px solid var(--line)}
+.kitcs{display:grid;grid-template-columns:1fr;gap:8px}
+.kitc{display:grid;grid-template-columns:34px minmax(0,1fr) 92px;gap:10px;align-items:center}
+.kitc label{font-size:13px}
+.kitc input[type=color]{width:34px;height:30px;padding:0;border:1px solid var(--line2);background:none;cursor:pointer}
+.kitc input[type=color].unset{opacity:.35}
+.kitc input[type=text]{font-family:var(--mono,ui-monospace,monospace);font-size:12px;padding:6px 8px}
+.kitd summary{cursor:pointer;font-size:13px;font-weight:600}
+.seg.wrap{flex-wrap:wrap;align-self:flex-start}
+.seg.wrap button{border-left:0;border-right:1px solid var(--line2)}
+.seg.wrap button:last-child{border-right:0}
