@@ -1,6 +1,7 @@
 import { ACCENTS, Env, HttpError, PRIVATE_SETTINGS, RESERVED_SUBDOMAINS, getSettings, id, isEmail, json, now, slugify } from "./util";
 import { Content, Page, Site, parseContent, renderPage } from "./render";
 import { cleanBlocks, fromTemplate, trackStoreLinks } from "./blocks";
+import { addDomain, cleanNav, getRedirects, removeDomain, setPrimary, setRedirects, siteDomains } from "./sitekit";
 import { defaultWelcome, siteList, upsertContact } from "./public";
 import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sendTest } from "./email";
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
@@ -162,15 +163,18 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         theme: THEMES.includes(d.theme) ? d.theme : s.theme,
         status: SITE_STATUS.includes(d.status) ? d.status : s.status,
         tagline: d.tagline !== undefined ? str(d.tagline, 120) : s.tagline,
+        nav: d.nav !== undefined ? JSON.stringify(cleanNav(d.nav)) : (s as any).nav || "{}",
       };
-      await env.DB.prepare("UPDATE sites SET name = ?, subdomain = ?, accent = ?, theme = ?, status = ?, tagline = ? WHERE id = ?")
-        .bind(next.name, next.subdomain, next.accent, next.theme, next.status, next.tagline, s.id).run();
+      await env.DB.prepare("UPDATE sites SET name = ?, subdomain = ?, accent = ?, theme = ?, status = ?, tagline = ?, nav = ? WHERE id = ?")
+        .bind(next.name, next.subdomain, next.accent, next.theme, next.status, next.tagline, next.nav, s.id).run();
       return json({ site: await getSite(env, s.id) });
     }
     if (b && !c && m === "DELETE") {
       await getSite(env, b);
       await env.DB.batch([
         env.DB.prepare("DELETE FROM pages WHERE site_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM domains WHERE site_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM redirects WHERE site_id = ?").bind(b),
         env.DB.prepare("DELETE FROM sites WHERE id = ?").bind(b),
       ]);
       return json({ ok: true });
@@ -179,6 +183,17 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       const { results } = await env.DB.prepare("SELECT * FROM pages WHERE site_id = ? ORDER BY (slug = '') DESC, template = 'post', created_at").bind(b).all();
       return json({ pages: results });
     }
+    if (b && c === "domains" && m === "GET") { await getSite(env, b); return json({ domains: await siteDomains(env, b) }); }
+    if (b && c === "domains" && m === "POST") { await getSite(env, b); return json({ domains: await addDomain(env, b, (await body(req)).hostname) }, 201); }
+    if (b && c === "redirects" && m === "GET") { await getSite(env, b); return json({ redirects: await getRedirects(env, b) }); }
+    if (b && c === "redirects" && m === "PUT") { await getSite(env, b); return json({ redirects: await setRedirects(env, b, (await body(req)).redirects) }); }
+  }
+
+  /* ---------- domains ---------- */
+  if (a === "domains" && b) {
+    const host = decodeURIComponent(b).toLowerCase();
+    if (m === "PATCH") return json({ domains: await setPrimary(env, host, !!(await body(req)).primary) });
+    if (m === "DELETE") return json({ domains: await removeDomain(env, host) });
   }
 
   /* ---------- pages ---------- */
@@ -245,7 +260,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
   if (a === "preview" && m === "POST") {
     const d = await body(req);
     const site = await getSite(env, str(d.site_id));
-    if (d.site) Object.assign(site, { name: d.site.name ?? site.name, accent: d.site.accent ?? site.accent, theme: d.site.theme ?? site.theme });
+    if (d.site) Object.assign(site, { name: d.site.name ?? site.name, accent: d.site.accent ?? site.accent, theme: d.site.theme ?? site.theme, ...(d.site.nav ? { nav: JSON.stringify(cleanNav(d.site.nav)) } : {}) });
     if (d.theme) site.theme = d.theme;
     const pg = d.page || {};
     const page: Page = { id: pg.id || "preview", site_id: site.id, slug: pg.slug ?? "preview", title: pg.title || "Preview", template: pg.template || "waitlist",

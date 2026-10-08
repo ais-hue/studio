@@ -177,3 +177,22 @@ h2.bk-h{font-family:var(--f-display);font-stretch:125%;font-weight:800;font-size
 .t-links .linklist{max-width:520px}
 .bk-rule{border:0;border-top:1px solid var(--rule);margin:0;width:100%}
 .bk-space{height:clamp(16px,4vw,40px)}
+
+/* ---------- site header extras and footer ---------- */
+.nav .mark.logo img{height:30px;width:auto;max-width:200px;display:block;object-fit:contain}
+.nav nav{align-items:center}
+.nav nav a.navbtn{background:var(--text);color:var(--bg);padding:8px 14px;letter-spacing:.1em}
+.nav nav a.navbtn:hover{background:var(--pc);color:var(--on-pc)}
+footer.sitefoot{border-top:4px solid var(--rule);padding-top:24px;display:flex;flex-direction:column;justify-content:flex-start;gap:28px;font-family:var(--f-body);font-size:14px;letter-spacing:0;color:var(--muted)}
+.sf-top{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:28px}
+@media (max-width:720px){.sf-top{grid-template-columns:1fr}}
+.sf-brand b{font-family:var(--f-display);font-stretch:125%;font-weight:800;text-transform:uppercase;font-size:15px;color:var(--text)}
+.sf-brand p{margin:8px 0 0;max-width:32ch}
+.sf-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:20px}
+.sf-col h2{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 10px}
+.sf-col ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.sf-col a{color:var(--text);text-decoration:none}
+.sf-col a:hover{color:var(--pc);text-decoration:underline}
+.sf-bot{border-top:1px solid var(--line);padding-top:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;color:var(--faint)}
+.sf-social{display:flex;gap:16px;flex-wrap:wrap}
+.sf-social a{color:var(--muted)}

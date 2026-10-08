@@ -10,6 +10,12 @@ Aisling's standalone marketing studio: sites on every `*.aisling.online` subdoma
 
 A page with template `blocks` is an ordered list of blocks (`src/blocks.ts`): hero, text, image, gallery, store buttons, features, quote, FAQ, signup, links, video and divider. Each has a background (page, soft, accent), spacing and a hidden switch; colours and type come from the site, so pages stay readable in light and dark and on phones. `cleanBlocks()` validates everything that is saved. Store buttons get tracked links when a page is saved (`source_type = 'page'`). The block editor (Sites → a page) lists blocks with add-between, drag or arrow reordering, duplicate, hide and delete with undo, and a live laptop/phone preview that follows the block being edited. Old template pages render as before and offer “Switch to blocks”; `POST /api/pages/<id>/convert` turns one into blocks and keeps the old version for `/unconvert`.
 
+## Site header, footer and domains
+
+Each site's Settings tab sets its logo, header links (one can be a button), footer columns, tagline and social links (`sites.nav`, `src/sitekit.ts`), plus redirects from old addresses (`redirects`, used only when no page has that address).
+
+**Custom domains** (`domains` table): a hostname serves a site, or redirects to another (adding `ciunas.app` also adds `www.ciunas.app` → `ciunas.app`). Requests for any hostname that isn't `*.<ROOT_DOMAIN>` are looked up there. For a domain to reach Studio at all, its zone must be on Cloudflare in the same account and `wrangler.jsonc` needs a route for it (`{ "pattern": "ciunas.app/*", "zone_name": "ciunas.app" }`, and the same for `www.`). Settings checks each domain from the browser through `/__studio/ping`. Making a connected domain the **main address** sends visitors from the site's `*.<ROOT_DOMAIN>` address there, and sets canonical links, `robots.txt` and `/sitemap.xml` to it.
+
 ## How email flows
 
 - **Sign-ups** land on the site's list. With double opt-in on (Settings), they wait as "pending" until they tap the link sent to `go.<domain>/confirm/…`.
