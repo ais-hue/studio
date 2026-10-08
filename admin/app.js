@@ -106,6 +106,8 @@ function route(){
   var p;
   if(top==="overview") p=overview();
   else if(top==="calendar") p=calendarView();
+  else if(top==="brands" && parts[1]) p=brandView(parts[1]);
+  else if(top==="brands") p=brandsView();
   else if(top==="sites" && parts[1]==="new") p=sitesView(true);
   else if(top==="sites" && parts[1]) p=siteView(parts[1], parts[2]||"pages", parts[3]);
   else if(top==="sites") p=sitesView();
@@ -191,6 +193,95 @@ function overview(){
 function swatches(current, name){
   return '<div class="swatches" role="group" aria-label="Colour">'+ACCENTS.map(function(a){ return '<button type="button" data-'+name+'="'+a[0]+'" style="--sw:var(--'+a[0]+')" aria-label="'+a[1]+'" title="'+a[1]+'" aria-pressed="'+(a[0]===current)+'"></button>' }).join("")+'</div>';
 }
+/* ============ brands ============ */
+var FONT_LIST=["Fraunces","Inter","Lora","Outfit","Playfair Display","DM Serif Display","DM Sans","Cormorant Garamond","EB Garamond","Libre Baskerville","Newsreader","Instrument Serif","Source Serif 4","Manrope","Hanken Grotesk","Space Grotesk","Work Sans","Karla","Nunito","Poppins","Archivo","IBM Plex Sans","IBM Plex Mono","JetBrains Mono"];
+var KIT_COLOURS=[["bg","Background"],["surface","Cards and fields"],["text","Text"],["muted","Quieter text"],["accent","Accent: buttons and links"],["on_accent","Text on the accent"],["accent2","Small labels above headings"]];
+var KIT_DARK=[["dark_bg","Background"],["dark_surface","Cards and fields"],["dark_text","Text"],["dark_muted","Quieter text"],["dark_accent","Accent"],["dark_on_accent","Text on the accent"]];
+function kitSwatches(k){ return '<span class="kitsw">'+["bg","text","accent","accent2","surface"].filter(function(x){return k[x]}).map(function(x){ return '<i style="background:'+esc(k[x])+'"></i>' }).join("")+'</span>' }
+
+function brandsView(){
+  return api("GET","brands").then(function(r){
+    var all=r.brands, roots=all.filter(function(b){ return !b.parent_id || !all.some(function(x){return x.id===b.parent_id}) });
+    function eff(b){ var p=b.parent_id&&all.filter(function(x){return x.id===b.parent_id})[0]; return Object.assign({}, p?eff(p):{}, b.kit) }
+    function card(b, child){ var k=eff(b);
+      return '<a class="bcardlink'+(child?" child":"")+'" href="#/brands/'+esc(b.id)+'">'+kitSwatches(k)+'<span class="t"><b>'+esc(b.name)+'</b><small>'+esc([k.font_display, k.font_body].filter(Boolean).join(" + ")||"House style")+(b.sites?' · '+b.sites+' site'+(b.sites===1?"":"s"):"")+'</small></span></a>' }
+    $("#view").innerHTML=head("Brand","Brands","Each brand’s fonts, colours, logo and shapes. Sites use their brand’s kit, and an app inherits its parent brand’s kit.",'<button class="btn primary" type="button" id="newBrand">New brand</button>')+
+      '<div id="nbHost"></div>'+
+      (all.length ? '<section class="panel"><div class="brandlist">'+roots.map(function(b){ return card(b)+all.filter(function(x){return x.parent_id===b.id}).map(function(c){ return card(c,true) }).join("") }).join("")+'</div></section>'
+        : '<div class="empty"><b>No brands yet</b><span>Make one for each thing you run. Apps can sit under a parent brand and borrow its look.</span></div>');
+    $("#newBrand").onclick=function(){
+      $("#nbHost").innerHTML='<form class="sheet panel" id="nbForm" autocomplete="off"><h3>New brand</h3><div class="field"><label for="nbName">Name</label><input type="text" id="nbName" maxlength="60" required placeholder="e.g. Ciúnas"></div>'+
+        '<div class="field"><label for="nbParent">Sits under</label><select id="nbParent"><option value="">Nothing: it’s a main brand</option>'+all.filter(function(b){return !b.parent_id}).map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>' }).join("")+'</select><span class="hint">An app under a main brand inherits its kit and changes only what’s its own.</span></div>'+
+        '<div class="actions"><button class="btn primary" type="submit">Create brand</button><button class="btn ghost" type="button" id="nbX">Cancel</button></div></form>';
+      $("#nbName").focus(); $("#nbX").onclick=function(){ $("#nbHost").innerHTML="" };
+      $("#nbForm").onsubmit=function(e){ e.preventDefault(); api("POST","brands",{name:$("#nbName").value, parent_id:$("#nbParent").value||null}).then(function(x){ go("#/brands/"+x.brand.id) }).catch(function(er){ toast(er.message,true) }) };
+    };
+  });
+}
+
+function brandView(bid){
+  return Promise.all([api("GET","brands/"+bid), api("GET","brands")]).then(function(r){
+    var br=r[0].brand, inh=r[0].inherited||{}, kit=Object.assign({}, br.kit), all=r[1].brands, social=r[1].social||[];
+    var hasParent=!!br.parent_id, dflt=hasParent?"As parent":"Default";
+    var kids=all.filter(function(x){return x.parent_id===br.id});
+    function val(k){ return kit[k]!==undefined?kit[k]:"" }
+    function ph(k, fallback){ return inh[k]!==undefined?String(inh[k]):(fallback||"") }
+    function colour(k, label){ var v=val(k), shown=v||inh[k]||"";
+      return '<div class="kitc"><input type="color" data-kc="'+k+'" value="'+esc(shown||"#888888")+'" aria-label="'+esc(label)+'"'+(shown?"":" class=\"unset\"")+'><label for="kc_'+k+'">'+esc(label)+'</label><input type="text" id="kc_'+k+'" data-kt="'+k+'" maxlength="7" value="'+esc(v)+'" placeholder="'+esc(ph(k, dflt.toLowerCase()))+'"></div>' }
+    function segk(k, label, opts){ var v=val(k);
+      return '<div class="field"><span class="label">'+esc(label)+'</span><div class="seg wrap" role="group" aria-label="'+esc(label)+'">'+[["",dflt+(inh[k]!==undefined?" ("+(opts.filter(function(o){return o[0]===inh[k]})[0]||[0,inh[k]])[1]+")":"")]].concat(opts).map(function(o){ return '<button type="button" data-ks="'+k+'" data-v="'+esc(o[0])+'" aria-pressed="'+(String(v)===o[0])+'">'+esc(o[1])+'</button>' }).join("")+'</div></div>' }
+    function textk(k, label, o){ o=o||{}; return '<div class="field"><label for="kx_'+k+'">'+esc(label)+'</label><input type="'+(o.type||"text")+'" id="kx_'+k+'" data-kx="'+k+'" maxlength="'+(o.max||200)+'" value="'+esc(val(k))+'" placeholder="'+esc(ph(k,o.ph||""))+'"'+(o.list?' list="'+o.list+'"':"")+(o.min!=null?' min="'+o.min+'" max="'+o.max2+'"':"")+'>'+(o.hint?'<span class="hint">'+o.hint+'</span>':"")+'</div>' }
+    function imgk(k, label, hint){ var u=val(k)||"", iu=inh[k]||"";
+      return '<div class="field"><span class="label">'+esc(label)+'</span><div class="bimgrow">'+(u||iu?'<img src="'+esc(u||iu)+'" alt=""'+(u?"":' style="opacity:.5"')+'>':'<span class="bimgnone">None</span>')+'<div class="actions">'+(S.me.files?'<button type="button" class="btn sm" data-ki="'+k+'">'+(u?"Change":"Choose")+'</button>':'')+(u?'<button type="button" class="btn sm ghost" data-kix="'+k+'">Remove</button>':'')+'</div></div>'+(hint?'<span class="hint">'+hint+'</span>':"")+'</div>' }
+
+    $("#view").innerHTML=head('<a href="#/brands">Brands</a>'+(hasParent?' › '+esc((all.filter(function(x){return x.id===br.parent_id})[0]||{}).name||""):""), br.name, "")+
+      '<div class="editor"><form class="form panel" id="bkForm" autocomplete="off"><h2 class="sec">Brand kit <span class="saving" id="bkSave">Saved</span></h2>'+
+      '<div class="field"><label for="bkName">Name</label><input type="text" id="bkName" maxlength="60" value="'+esc(br.name)+'"></div>'+
+      '<div class="field"><label for="bkParent">Sits under</label><select id="bkParent"><option value="">Nothing: it’s a main brand</option>'+all.filter(function(x){return x.id!==br.id && !x.parent_id && !kids.length}).map(function(x){ return '<option value="'+esc(x.id)+'"'+(x.id===br.parent_id?" selected":"")+'>'+esc(x.name)+'</option>' }).join("")+'</select>'+(hasParent?'<span class="hint">Empty fields use the parent’s values, shown faintly.</span>':'')+'</div>'+
+      (social.length?'<div class="field"><label for="bkSocial">Social accounts</label><select id="bkSocial"><option value="">None</option>'+social.map(function(x){ return '<option value="'+esc(x.id)+'"'+(x.brand_id===br.id?" selected":"")+'>'+esc(x.name)+'</option>' }).join("")+'</select><span class="hint">The social brand whose accounts, posting times and Claude brief belong to this brand.</span></div>':'')+
+      '<datalist id="fontlist">'+FONT_LIST.map(function(f){ return '<option value="'+esc(f)+'">' }).join("")+'</datalist>'+
+      '<h3 class="kith">Logo</h3>'+textk("logo_text","Wordmark",{max:40,ph:"e.g. ciunas",hint:"Shown in the header, in the heading font. Leave empty to show the site’s name."})+segk("logo_mark","Mark beside it",[["square","Square"],["dot","Dot"],["none","None"]])+imgk("logo_image","Logo image","Used instead of the wordmark when set.")+
+      '<h3 class="kith">Colours</h3><div class="kitcs">'+KIT_COLOURS.map(function(c){ return colour(c[0],c[1]) }).join("")+'</div>'+
+      '<details class="kitd"><summary>Dark mode</summary><div class="stack" style="gap:10px;margin-top:10px">'+segk("mode","When visitors use dark mode",[["auto","Follow them"],["light","Always light"],["dark","Always dark"]])+'<p class="hint" style="margin:0">With your own colours and no dark ones set, pages stay light.</p><div class="kitcs">'+KIT_DARK.map(function(c){ return colour(c[0],c[1]) }).join("")+'</div></div></details>'+
+      '<h3 class="kith">Type</h3>'+textk("font_display","Heading font",{list:"fontlist",max:40,ph:"Archivo (house style)",hint:"Any Google font. Served from your own address, so visitors’ browsers never contact Google."})+textk("font_body","Body font",{list:"fontlist",max:40,ph:"IBM Plex Sans"})+textk("font_label","Labels and navigation font",{list:"fontlist",max:40,ph:"IBM Plex Mono"})+
+      segk("display_weight","Heading weight",[["300","Light"],["400","Regular"],["500","Medium"],["600","Semibold"],["700","Bold"],["800","Heavy"]])+
+      segk("display_case","Headings",[["none","As typed"],["upper","CAPITALS"]])+
+      segk("emphasis","*Emphasised* words in headings",[["italic","Italic"],["accent","Accent colour"],["both","Italic, accent"],["none","Plain"]])+
+      segk("label_case","Labels",[["upper","CAPITALS"],["none","As typed"]])+
+      segk("nav_style","Header links",[["label","Like labels"],["plain","Plain text"]])+
+      '<h3 class="kith">Shapes</h3>'+textk("radius","Corner roundness (px)",{type:"number",min:0,max2:32,max:2,ph:"0"})+
+      segk("buttons","Buttons",[["square","Square"],["rounded","Rounded"],["pill","Pill"]])+segk("button_color","Button colour",[["ink","Text colour"],["accent","Accent"]])+
+      segk("cards","Cards",[["line","Outlined"],["shadow","Soft shadow"],["flat","Tinted"]])+segk("rules","Lines under the header and above the footer",[["bold","Bold"],["hairline","Hairline"],["none","None"]])+
+      segk("eyebrow","Small labels above headings",[["plain","Plain"],["pill","In a pill"],["dash","With a dash"]])+
+      '<h3 class="kith">Background</h3>'+segk("background","Page background",[["plain","Plain"],["aurora","Soft glow"],["texture","Texture"]])+
+      '<div class="kitcs">'+colour("glow1","Glow, top left")+colour("glow2","Glow, top right")+colour("glow3","Glow, lower")+'</div>'+imgk("texture","Texture image","A seamless image, repeated behind the page.")+
+      '<h3 class="kith">About</h3>'+textk("one_liner","One line about it",{max:200})+textk("app_store","App Store link",{max:1000,ph:"https://apps.apple.com/app/…"})+imgk("icon","App icon")+
+      '<h2 class="sec">Delete brand</h2><p class="hint">Sites and social accounts keep working and go back to the house style. Apps under it become main brands.</p><div class="actions"><button type="button" class="btn sm danger" id="bkDel">Delete '+esc(br.name)+'</button></div><div id="bkDelC"></div>'+
+      '</form><div class="proof"><div class="proofbar"><span class="url">Preview</span><div class="seg" role="group" aria-label="Preview size"><button type="button" data-pw="full" aria-pressed="true">Laptop</button><button type="button" data-pw="phone" aria-pressed="false">Phone</button></div></div><div class="pvwrap" id="pvwrap"><iframe id="pv" title="Brand preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div></div>';
+
+    var save=saver($("#bkSave"), function(d){ return api("PATCH","brands/"+bid,d).then(function(x){ br=x.brand }) });
+    var pvT; function preview(){ clearTimeout(pvT); pvT=setTimeout(function(){ api("POST","brands/"+bid+"/preview",{kit:kit}).then(function(html){ var f=$("#pv"); if(f) f.srcdoc=html }).catch(function(){}) },250) }
+    S.cleanup.push(function(){ clearTimeout(pvT) });
+    function setK(k,v){ if(v===""||v==null) delete kit[k]; else kit[k]=v; save({kit:JSON.parse(JSON.stringify(kit))}); preview() }
+    $("#bkName").oninput=function(){ save({name:this.value}) };
+    $("#bkParent").onchange=function(){ save({parent_id:this.value||null}); save.now(); setTimeout(function(){ route() },600) };
+    var so=$("#bkSocial"); if(so) so.onchange=function(){ api("PUT","brands/"+bid+"/social",{social_brand_id:so.value}).then(function(){ toast("Saved") }).catch(function(e){ toast(e.message,true) }) };
+    $$("[data-kt]").forEach(function(i){ i.oninput=function(){ var v=i.value.trim(); if(v && !/^#[0-9a-f]{6}$/i.test(v)) return; var c=$('[data-kc="'+i.dataset.kt+'"]'); if(c){ c.value=v||inh[i.dataset.kt]||"#888888"; c.classList.toggle("unset",!v&&!inh[i.dataset.kt]) } setK(i.dataset.kt, v.toLowerCase()) } });
+    $$("[data-kc]").forEach(function(c){ c.oninput=function(){ var t=$('[data-kt="'+c.dataset.kc+'"]'); t.value=c.value; c.classList.remove("unset"); setK(c.dataset.kc, c.value.toLowerCase()) } });
+    $$("[data-ks]").forEach(function(b){ b.onclick=function(){ var k=b.dataset.ks; $$('[data-ks="'+k+'"]').forEach(function(x){ x.setAttribute("aria-pressed", String(x===b)) }); setK(k, b.dataset.v===""?"":(/^\d+$/.test(b.dataset.v)?+b.dataset.v:b.dataset.v)) } });
+    $$("[data-kx]").forEach(function(i){ i.oninput=function(){ var k=i.dataset.kx, v=i.value; setK(k, k==="radius"?(v===""?"":+v):v.trim()) } });
+    $$("[data-ki]").forEach(function(b){ b.onclick=function(){ pickFromLibrary({kind:"image"}).then(function(fs){ if(!fs.length) return; setK(b.dataset.ki, fs[0].url); save.now(); setTimeout(function(){ route() },500) }) } });
+    $$("[data-kix]").forEach(function(b){ b.onclick=function(){ setK(b.dataset.kix,""); save.now(); setTimeout(function(){ route() },500) } });
+    $$("[data-pw]").forEach(function(b){ b.onclick=function(){ $("#pvwrap").classList.toggle("phone", b.dataset.pw==="phone"); $$("[data-pw]").forEach(function(x){ x.setAttribute("aria-pressed", String(x===b)) }) } });
+    $("#bkDel").onclick=function(){
+      $("#bkDelC").innerHTML='<div class="confirm"><span>Delete '+esc(br.name)+'? Its kit can’t be brought back.</span><button class="btn sm danger" type="button" id="bkDelY">Delete brand</button><button class="btn sm ghost" type="button" id="bkDelN">Keep it</button></div>';
+      $("#bkDelN").onclick=function(){ $("#bkDelC").innerHTML="" };
+      $("#bkDelY").onclick=function(){ api("DELETE","brands/"+bid).then(function(){ toast("Brand deleted"); go("#/brands") }).catch(function(e){ toast(e.message,true) }) };
+    };
+    preview();
+  });
+}
+
 function sitesView(openNew){
   return api("GET","sites").then(function(d){
     var v=$("#view"), accent="brass";
@@ -329,7 +420,7 @@ function blockNeeds(b){
 function blockEditor(host, site, p, onConverted){
   var c={}; try{ c=JSON.parse(p.content||"{}") }catch(e){}
   var blocks=Array.isArray(c.blocks)?c.blocks:[];
-  var meta={description:c.description||"", share_image:c.share_image||""};
+  var meta={description:c.description||"", share_image:c.share_image||"", brand:c.brand||""};
   var openId=null, insertAt=-1, dragFrom=-1;
   var previewTheme=store("proof.pvtheme")||"site";
   var hasPrev=!!p.previous;
@@ -339,6 +430,7 @@ function blockEditor(host, site, p, onConverted){
       '<div class="field"><label for="pTitle">Page name</label><input type="text" id="pTitle" maxlength="80" value="'+esc(p.title)+'"></div>'+
       (p.slug!=="" ? '<div class="field"><label for="pSlug">Address</label><div class="affix"><span>/</span><input type="text" id="pSlug" maxlength="60" value="'+esc(p.slug)+'"></div><span class="hint">Lives at '+esc(hostOf(site))+'/<span id="slugEcho">'+esc(p.slug)+'</span></span></div>' : '<p class="hint" style="margin:0">This is the home page at '+esc(hostOf(site))+'.</p>')+
       '<div class="field"><label for="pDesc">Description for search and sharing</label><textarea id="pDesc" maxlength="300" rows="2">'+esc(meta.description)+'</textarea><span class="hint">Shown under the title in Google and in link previews. Leave empty to use the hero’s line.</span></div>'+
+      '<div class="field" id="pAppF" hidden><label for="pApp">Wear an app’s colours</label><select id="pApp"></select><span class="hint">For an app’s page on the main brand’s site: buttons and accents use the app’s colours.</span></div>'+
       '<div class="field"><span class="label">Share image</span><div id="pShare"></div><span class="hint">Shown when the page is shared. Leave empty to use the hero picture.</span></div>'+
       (hasPrev?'<button type="button" class="btn sm ghost" id="pUnconvert" style="align-self:flex-start">Go back to the old version of this page</button>':'')+
       (p.slug!==""?'<div class="actions"><button type="button" class="btn sm danger" id="delPage">Delete page</button></div><div id="delConfirm"></div>':'')+
@@ -354,7 +446,7 @@ function blockEditor(host, site, p, onConverted){
       var sl=$("#pSlug"); if(sl && document.activeElement!==sl && sl.value!==r.page.slug) sl.value=r.page.slug;
       $("#pvSlug").textContent=r.page.slug; var se=$("#slugEcho"); if(se) se.textContent=r.page.slug });
   });
-  function content(){ return {blocks:blocks, description:meta.description, share_image:meta.share_image} }
+  function content(){ return {blocks:blocks, description:meta.description, share_image:meta.share_image, brand:meta.brand} }
   function changed(){ save({content:JSON.parse(JSON.stringify(content()))}); preview() }
 
   /* ----- preview, keeping the scroll position between reloads ----- */
@@ -397,9 +489,10 @@ function blockEditor(host, site, p, onConverted){
       (items.length<max?'<button type="button" class="btn sm" data-rowadd="'+key+'">'+esc(addLabel)+'</button>':'')+'</div>' }
 
   function fieldsFor(b){
-    var h="";
+    var h="", sectioned=["cards","features","faq","signup","store","links","quote"].indexOf(b.type)>-1;
+    if(sectioned) h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. The apps"});
     if(b.type==="hero"){
-      h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. Out now on iPhone"})+txt(b,"headline","Headline",{max:160})+txt(b,"sub","Line under it",{area:true,rows:2,max:400});
+      h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. Out now on iPhone"})+txt(b,"headline","Headline",{max:160,hint:"Put *stars* round a word to give it the brand’s emphasis."})+txt(b,"sub","Line under it",{area:true,rows:2,max:400});
       h+='<span class="label">Buttons</span>'+rows(b,"buttons",[["label","Button words",{max:40}],["url","Goes to",{max:1000,ph:"https://… or /page"}]],"Add a button",2);
       (b.buttons||[]).forEach(function(x,i){ if(!x.style) x.style=i?"plain":"primary" });
       h+=imageField("image.url","image.alt","Picture",b)+(b.image&&b.image.url?seg(b,"image.frame","Picture style",[["none","Plain"],["phone","In a phone"]]):"");
@@ -436,6 +529,7 @@ function blockEditor(host, site, p, onConverted){
     if(b.type==="links") h+=txt(b,"heading","Heading",{max:120})+rows(b,"items",[["label","Words",{max:80}],["url","Goes to",{max:1000,ph:"https://…"}]],"Add a link",30);
     if(b.type==="video") h+=txt(b,"url","Video",{max:1000,ph:"YouTube link, or a video file’s link",hint:S.me.files?'<button type="button" class="linkbtn" data-pickvideo="url">Choose a video from Files</button>':""})+(b.url&&!/youtu/.test(b.url)?imageField("poster",null,"Still shown before it plays",b):"")+txt(b,"caption","Caption",{max:200});
     if(b.type==="divider") h+=seg(b,"style","Kind",[["rule","A line"],["space","Just space"]]);
+    if(sectioned) h+=seg(b,"align","Line up",[["left","Left"],["center","Centre"]]);
     if(b.type!=="divider") h+='<div class="fieldrow">'+seg(b,"bg","Background",[["page","Page"],["soft","Soft"],["accent","Accent"]])+seg(b,"space","Spacing",[["tight","Tight"],["normal","Normal"],["airy","Airy"]])+'</div>';
     return h;
   }
@@ -514,6 +608,13 @@ function blockEditor(host, site, p, onConverted){
     var xb=$("#pShareX"); if(xb) xb.onclick=function(){ meta.share_image=""; drawShare(); changed() };
   }
   drawShare();
+  // Child brands of the site's brand can lend a page their accents.
+  if(site.brand_id) api("GET","brands").then(function(r){
+    var kids=r.brands.filter(function(x){ return x.parent_id===site.brand_id }); if(!kids.length) return;
+    var sl=$("#pApp"); if(!sl) return;
+    sl.innerHTML='<option value="">No, use the site’s own colours</option>'+kids.map(function(k){ return '<option value="'+esc(k.id)+'"'+(k.id===meta.brand?" selected":"")+'>'+esc(k.name)+'</option>' }).join("");
+    $("#pAppF").hidden=false; sl.onchange=function(){ meta.brand=sl.value; changed() };
+  }).catch(function(){});
   var un=$("#pUnconvert"); if(un) un.onclick=function(){ save.now(); api("POST","pages/"+p.id+"/unconvert").then(function(r){ toast("Back to the old version"); if(onConverted) onConverted(r.page) }).catch(function(e){ toast(e.message,true) }) };
   var del=$("#delPage"); if(del) del.onclick=function(){ $("#delConfirm").innerHTML='<div class="confirm"><span>Delete “'+esc(p.title)+'”? This can’t be undone.</span><button class="btn sm danger" type="button" id="delYes">Delete page</button><button class="btn sm ghost" type="button" id="delNo">Keep it</button></div>';
     $("#delNo").onclick=function(){ $("#delConfirm").innerHTML="" };
@@ -871,7 +972,8 @@ function siteSettings(site){
     '<div class="field"><label for="ssName">Name</label><input type="text" id="ssName" maxlength="60" value="'+esc(site.name)+'"></div>'+
     '<div class="field"><label for="ssSub">Address</label><div class="affix"><input type="text" id="ssSub" maxlength="30" value="'+esc(site.subdomain)+'"><span>.'+esc(S.me.root)+'</span></div><span class="hint">Changing this moves every page to the new address straight away. Old links stop working.</span></div>'+
     '<div class="field"><label for="ssTag">Tagline</label><input type="text" id="ssTag" maxlength="120" value="'+esc(site.tagline)+'"><span class="hint">Used in the browser tab and link previews.</span></div>'+
-    '<div class="field"><span class="label">Colour</span>'+swatches(site.accent,"acc")+'</div>'+
+    '<div class="field"><label for="ssBrand">Brand</label><select id="ssBrand"><option value="">None: Studio’s house style</option></select><span class="hint">The site’s fonts, colours, logo and shapes come from its brand. <a href="#/brands">Edit brands</a></span></div>'+
+    '<div class="field" id="ssColour"><span class="label">Colour</span>'+swatches(site.accent,"acc")+'<span class="hint" id="ssColourHint" hidden>The brand’s accent colour is used instead while a brand is set.</span></div>'+
     '<div class="field"><span class="label">Theme</span><div class="seg" role="group" aria-label="Theme" style="align-self:flex-start">'+[["auto","Follow visitor"],["light","Light"],["dark","Dark"]].map(function(t){ return '<button type="button" data-th="'+t[0]+'" aria-pressed="'+(site.theme===t[0])+'">'+t[1]+'</button>' }).join("")+'</div></div>'+
     '<div id="navHost"></div><div id="domHost"></div><div id="redHost"></div>'+
     '<h2 class="sec">Delete site</h2><p class="hint">Removes the site and all its pages. Contacts and emails stay.</p><div class="actions"><button type="button" class="btn sm danger" id="delSite">Delete '+esc(site.name)+'</button></div><div id="delConfirm"></div>'+
@@ -880,13 +982,19 @@ function siteSettings(site){
   function preview(){
     api("GET","sites/"+site.id+"/pages").then(function(r){
       var home=r.pages.filter(function(p){return p.slug===""})[0]; if(!home) return;
-      return api("POST","preview",{ site_id:site.id, site:{name:site.name, accent:site.accent, theme:site.theme, nav:navModel}, page:{ id:home.id, slug:"", title:home.title, template:home.template, content:JSON.parse(home.content||"{}") } });
+      return api("POST","preview",{ site_id:site.id, site:{name:site.name, accent:site.accent, theme:site.theme, nav:navModel, brand_id:site.brand_id||""}, page:{ id:home.id, slug:"", title:home.title, template:home.template, content:JSON.parse(home.content||"{}") } });
     }).then(function(html){ if(html && $("#pv")) $("#pv").srcdoc=html }).catch(function(){});
   }
   var navModel=null, pvT;
   navModel=navEditor($("#navHost"), site, function(n){ save({nav:JSON.parse(JSON.stringify(n))}); clearTimeout(pvT); pvT=setTimeout(preview,400) });
   domainsEditor($("#domHost"), site);
   redirectsEditor($("#redHost"), site);
+  api("GET","brands").then(function(r){
+    var sl=$("#ssBrand"); if(!sl) return;
+    sl.innerHTML+=r.brands.map(function(x){ var par=x.parent_id&&r.brands.filter(function(y){return y.id===x.parent_id})[0]; return '<option value="'+esc(x.id)+'"'+(x.id===site.brand_id?" selected":"")+'>'+esc((par?par.name+" › ":"")+x.name)+'</option>' }).join("");
+    $("#ssColourHint").hidden=!site.brand_id;
+    sl.onchange=function(){ site.brand_id=sl.value||null; $("#ssColourHint").hidden=!site.brand_id; save({brand_id:sl.value}); save.now() };
+  }).catch(function(){});
   $("#ssName").oninput=function(){ site.name=this.value; save({name:this.value}) };
   $("#ssSub").oninput=function(){ save({subdomain:this.value}) };
   $("#ssTag").oninput=function(){ save({tagline:this.value}) };

@@ -43,10 +43,16 @@ export function parseNav(raw: string | null | undefined): SiteNav {
 const ext = (url: string) => (/^https?:\/\//i.test(url) ? ` rel="noopener"` : "");
 
 /** The site header: logo or name, then the site's own links (and the journal, when it has posts). */
-export function renderHeader(o: { name: string; nav: SiteNav; hasBlog: boolean; current: string; path: string }): string {
-  const mark = o.nav.logo
-    ? `<a class="mark logo" href="/"><img src="${esc(o.nav.logo)}" alt="${esc(o.name)}"></a>`
-    : `<a class="mark" href="/"><i aria-hidden="true"></i>${esc(o.name)}</a>`;
+export interface BrandLogo { image?: string; text?: string; mark?: string }
+
+export function renderHeader(o: { name: string; nav: SiteNav; hasBlog: boolean; current: string; path: string; logo?: BrandLogo }): string {
+  // The site's own logo wins, then the brand's logo image, then the brand's wordmark, then the site name.
+  const img = o.nav.logo || o.logo?.image;
+  const mark = img
+    ? `<a class="mark logo" href="/"><img src="${esc(img)}" alt="${esc(o.name)}"></a>`
+    : o.logo?.text
+      ? `<a class="mark word" href="/" aria-label="${esc(o.name)}"><i aria-hidden="true"></i>${esc(o.logo.text)}</a>`
+      : `<a class="mark" href="/"><i aria-hidden="true"></i>${esc(o.name)}</a>`;
   let items: string[];
   if (o.nav.header.length) {
     items = o.nav.header.map((l) => {
@@ -61,7 +67,7 @@ export function renderHeader(o: { name: string; nav: SiteNav; hasBlog: boolean; 
 }
 
 /** The site footer: a simple line, or tagline, link columns and social links when the site has them. */
-export function renderFooter(o: { name: string; nav: SiteNav; host: string }): string {
+export function renderFooter(o: { name: string; nav: SiteNav; host: string; logo?: BrandLogo }): string {
   const f = o.nav.footer;
   const year = new Date().getFullYear();
   if (!f.tagline && !f.columns.length && !f.social.length) {
@@ -69,7 +75,7 @@ export function renderFooter(o: { name: string; nav: SiteNav; host: string }): s
   }
   const cols = f.columns.map((c) => `<div class="sf-col">${c.heading ? `<h2>${esc(c.heading)}</h2>` : ""}<ul>${c.links.map((l) => `<li><a href="${esc(l.url)}"${ext(l.url)}>${esc(l.label)}</a></li>`).join("")}</ul></div>`).join("");
   const social = f.social.map((l) => `<a href="${esc(l.url)}"${ext(l.url)}>${esc(l.label)}</a>`).join("");
-  return `<footer class="sitefoot"><div class="sf-top"><div class="sf-brand"><b>${esc(o.name)}</b>${f.tagline ? `<p>${esc(f.tagline)}</p>` : ""}</div>${cols ? `<nav class="sf-cols" aria-label="Footer">${cols}</nav>` : ""}</div>
+  return `<footer class="sitefoot"><div class="sf-top"><div class="sf-brand${o.logo?.text ? " word" : ""}"><b>${esc(o.logo?.text || o.name)}</b>${f.tagline ? `<p>${esc(f.tagline)}</p>` : ""}</div>${cols ? `<nav class="sf-cols" aria-label="Footer">${cols}</nav>` : ""}</div>
 <div class="sf-bot"><span>© ${year} ${esc(o.name)}</span>${social ? `<span class="sf-social">${social}</span>` : `<span>${esc(o.host)}</span>`}</div></footer>`;
 }
 

@@ -2,10 +2,12 @@ import { formCss, renderFields } from "./forms";
 import { accentOf, esc, markdown } from "./util";
 import { BlocksContent, parseBlocks, renderBlocks } from "./blocks";
 import { parseNav, renderFooter, renderHeader } from "./sitekit";
+import type { BrandStyle } from "./brandkit";
 
 export interface Site {
   id: string; name: string; subdomain: string; accent: string; theme: string; status: string; tagline: string;
   nav?: string;           // header links, logo and footer as JSON (src/sitekit.ts)
+  brand_id?: string | null;
 }
 export interface Page {
   id: string; site_id: string; slug: string; title: string; template: string;
@@ -31,6 +33,7 @@ export interface RenderOpts {
   resize?: boolean;       // Cloudflare image transformations are on, so block pages can serve resized images
   canonical?: string;     // the page's address on the site's main domain
   path?: string;          // the path being shown, so the header can mark the current page
+  brand?: BrandStyle;     // the site's brand kit as CSS (src/brandkit.ts); none = Studio's house style
 }
 
 const fmtDate = (ms: number) =>
@@ -38,11 +41,13 @@ const fmtDate = (ms: number) =>
 
 function shell(site: Site, title: string, desc: string, body: string, o: RenderOpts, bodyClass = "", current = "", image = ""): string {
   const [light, dark] = accentOf(site.accent);
-  const theme = ["light", "dark"].includes(site.theme) ? site.theme : "auto";
+  const br = o.brand;
+  const want = br?.theme || site.theme;
+  const theme = ["light", "dark"].includes(want) ? want : "auto";
   const sn = parseNav(site.nav);
-  const nav = renderHeader({ name: site.name, nav: sn, hasBlog: o.hasBlog, current, path: o.path || "/" });
-  const foot = renderFooter({ name: site.name, nav: sn, host: o.host });
-  return `<!doctype html><html lang="en" data-theme="${theme}"><head><meta charset="utf-8">
+  const nav = renderHeader({ name: site.name, nav: sn, hasBlog: o.hasBlog, current, path: o.path || "/", logo: br?.logo });
+  const foot = renderFooter({ name: site.name, nav: sn, host: o.host, logo: br?.logo });
+  return `<!doctype html><html lang="en" data-theme="${theme}"${br?.attrs || ""}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${esc(title)}</title>
 ${desc ? `<meta name="description" content="${esc(desc)}"><meta property="og:description" content="${esc(desc)}">` : ""}
@@ -50,10 +55,10 @@ ${desc ? `<meta name="description" content="${esc(desc)}"><meta property="og:des
 ${o.canonical && !o.preview ? `<link rel="canonical" href="${esc(o.canonical)}"><meta property="og:url" content="${esc(o.canonical)}">` : ""}
 ${image ? `<meta property="og:image" content="${esc(image)}"><meta name="twitter:card" content="summary_large_image">` : ""}
 ${o.preview ? `<meta name="robots" content="noindex">` : ""}
-<link rel="preload" href="/__proof/fonts/archivo-wdth.woff2" as="font" type="font/woff2" crossorigin>
+${br?.fonts ? `<link rel="stylesheet" href="${esc(br.fonts)}">` : `<link rel="preload" href="/__proof/fonts/archivo-wdth.woff2" as="font" type="font/woff2" crossorigin>`}
 <link rel="stylesheet" href="/__proof/fonts/fonts.css">
 <link rel="stylesheet" href="/__proof/site.css">
-<style>:root{--pc-light:${light};--pc-dark:${dark}}</style>
+<style>:root{--pc-light:${light};--pc-dark:${dark}}${br?.css || ""}</style>
 </head><body class="${bodyClass}"><div class="page">${nav}<main>${body}</main>${foot}</div>${formScript(o)}</body></html>`;
 }
 

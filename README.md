@@ -12,6 +12,10 @@ A page with template `blocks` is an ordered list of blocks (`src/blocks.ts`): he
 
 **Importing pages** (Sites → New page → “Or import pages from another website”): one address per line. Studio's server fetches each page (`POST /api/import/page`; public https only), the editor turns its main content into blocks with the words unchanged (`htmlToBlocks` in `admin/app.js`), copies pictures into Files (`POST /api/import/file`) and saves a draft page at the same address.
 
+## Brands
+
+A brand holds a site's look: fonts, colours, logo, shapes, background and the style of small labels (Brands in the sidebar). Sites pick their brand in Site settings; a site with no brand uses Studio's house style. A brand can sit under a parent (an app under Ciúnas): it inherits the parent's kit and keeps only what it changes, and a block page can wear an app brand's colours from its page settings. Headings take `*stars*` around a word for the brand's emphasis style. Google fonts are fetched and cached by the Worker and served from the site's own address (`/__proof/gf.css`), so visitors' browsers never contact Google. The kit lives in `src/brandkit.ts`; every stylistic value in `admin/site.css` is a custom property it can set.
+
 ## Site header, footer and domains
 
 Each site's Settings tab sets its logo, header links (one can be a button), footer columns, tagline and social links (`sites.nav`, `src/sitekit.ts`), plus redirects from old addresses (`redirects`, used only when no page has that address).

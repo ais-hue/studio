@@ -1,5 +1,6 @@
 import { Env, HttpError, esc, getSettings, html, id, isEmail, json, now, token } from "./util";
 import { Page, RenderOpts, Site, renderBlog, renderNotice, renderPage } from "./render";
+import { serveFonts, styleFor } from "./brandkit";
 import { processQueue, sendConfirmation } from "./email";
 import { exitAll, onCampaignClick, onListJoin, runSequences } from "./automation";
 import { handleResendWebhook } from "./hooks";
@@ -236,6 +237,7 @@ async function common(req: Request, env: Env, ctx: ExecutionContext, host: strin
   const p = url.pathname;
   if (p === "/__proof/site.css") return serveStatic(req, env, "/site.css");
   if (p.startsWith("/__proof/fonts/")) return serveStatic(req, env, p.replace("/__proof", ""));
+  const gf = await serveFonts(req, url, ctx); if (gf) return gf;
   if (p === "/__proof/subscribe" && req.method === "POST") return subscribe(req, env, ctx, host);
   return null;
 }
@@ -292,7 +294,7 @@ async function serveSite(req: Request, env: Env, ctx: ExecutionContext, url: URL
 
   const posts = (await env.DB.prepare("SELECT * FROM pages WHERE site_id = ? AND template = 'post' AND published = 1 ORDER BY created_at DESC")
     .bind(site.id).all<Page>()).results;
-  const o: RenderOpts = { ...base, hasBlog: posts.length > 0, joined: url.searchParams.get("joined") === "1", path: p.replace(/\/+$/, "") || "/" };
+  const o: RenderOpts = { ...base, hasBlog: posts.length > 0, joined: url.searchParams.get("joined") === "1", path: p.replace(/\/+$/, "") || "/", brand: await styleFor(env, site) };
 
   if (p === "/blog" || p === "/blog/") {
     if (!posts.length) return html(renderNotice(site, "Not found", "There’s no page at this address.", o, "404"), 404);
@@ -315,7 +317,9 @@ async function serveSite(req: Request, env: Env, ctx: ExecutionContext, url: URL
   if (req.method === "GET" && !/bot|crawl|spider|preview/i.test(req.headers.get("user-agent") || "")) {
     ctx.waitUntil(env.DB.prepare("UPDATE pages SET views = views + 1 WHERE id = ?").bind(page.id).run());
   }
-  const fid = (() => { try { return String(JSON.parse(page.content || "{}").form_id || ""); } catch { return ""; } })();
+  const pc = (() => { try { return JSON.parse(page.content || "{}"); } catch { return {}; } })();
+  o.brand = await styleFor(env, site, page.template === "blocks" ? pc.brand : null);
+  const fid = String(pc.form_id || "");
   if (fid) { const f = await loadForm(env, fid); if (f && f.status === "active") o.form = f; }
   return html(renderPage(site, page, o), 200, { "cache-control": o.joined ? "no-store" : "public, max-age=30" });
 }
