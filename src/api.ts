@@ -257,6 +257,33 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     }
   }
 
+  /*
+   * Import a page from another website: Studio's server fetches the HTML (Studio's admin can't, because of the
+   * browser's cross-site rules) and the editor turns its main content into blocks. Public https pages only; the
+   * Worker runs with global_fetch_strictly_public, so private addresses can't be reached.
+   */
+  if (a === "import" && b === "page" && m === "POST") {
+    const d = await body(req);
+    let u: URL;
+    try { u = new URL(str(d.url, 2000)); } catch { throw new HttpError(400, "That isn’t a web address. Paste the whole thing, starting https://"); }
+    if (u.protocol !== "https:") throw new HttpError(400, "Only https pages can be imported.");
+    const root = env.ROOT_DOMAIN.toLowerCase();
+    if (u.hostname === root || u.hostname.endsWith("." + root)) throw new HttpError(400, "That page is already in Studio.");
+    const res = await fetch(u.toString(), { redirect: "follow", headers: { "user-agent": "Studio/1.0 page import (+https://studio." + env.ROOT_DOMAIN + ")", accept: "text/html" } });
+    if (!res.ok) throw new HttpError(502, `${u.hostname} answered with an error (${res.status}). Check the address opens in a browser.`);
+    const type = (res.headers.get("content-type") || "").toLowerCase();
+    if (!type.includes("text/html")) throw new HttpError(400, "That address isn’t a web page.");
+    const html = await res.text();
+    if (html.length > 3_000_000) throw new HttpError(413, "That page is too big to import.");
+    return json({ url: res.url || u.toString(), html });
+  }
+  /* Copy a picture from another website into Files, for imported pages. */
+  if (a === "import" && b === "file" && m === "POST") {
+    const d = await body(req);
+    const f = await importUrl(env, str(d.url, 2000), str(d.folder, 60), str(d.alt, 300));
+    return json({ url: fileUrl(env, f.key), id: f.id }, 201);
+  }
+
   if (a === "preview" && m === "POST") {
     const d = await body(req);
     const site = await getSite(env, str(d.site_id));

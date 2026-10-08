@@ -10,7 +10,7 @@ import type { Content, Page } from "./render";
  * into blocks when it is opened in the block editor.
  */
 
-export const BLOCK_TYPES = ["hero", "text", "image", "gallery", "store", "features", "quote", "faq", "signup", "links", "video", "divider"] as const;
+export const BLOCK_TYPES = ["hero", "text", "split", "cards", "image", "gallery", "store", "features", "quote", "faq", "signup", "links", "video", "divider"] as const;
 export type BlockType = typeof BLOCK_TYPES[number];
 
 export interface Img { url: string; alt: string }
@@ -27,6 +27,8 @@ export interface Block {
   poster?: string;
   // store
   heading?: string; apple?: string; google?: string; apple_code?: string; google_code?: string; note?: string;
+  // split, cards
+  intro?: string; points?: string[]; side?: "left" | "right"; columns?: "2" | "3";
   // signup
   cta?: string; form_id?: string;
   // divider
@@ -95,6 +97,21 @@ export function cleanBlocks(input: any): BlocksContent {
         b.url = youtubeId(u) ? u : safeMedia(u); b.poster = safeMedia(r.poster); b.caption = s(r.caption, 200); break;
       }
       case "divider": b.style = pick(r.style, ["space", "rule"] as const, "rule"); break;
+      case "split":
+        b.eyebrow = s(r.eyebrow, 80); b.heading = s(r.heading, 160); b.md = s(r.md, 4000);
+        b.points = (Array.isArray(r.points) ? r.points : String(r.points ?? "").split("\n")).map((x: unknown) => s(x, 160)).filter(Boolean).slice(0, 8);
+        b.buttons = (Array.isArray(r.buttons) ? r.buttons : []).slice(0, 2)
+          .map((x: any) => ({ label: s(x?.label, 40), url: safeHref(x?.url), style: pick(x?.style, ["primary", "plain"] as const, "primary") }))
+          .filter((x: any) => x.label && x.url);
+        if (safeMedia(r.image?.url)) b.image = { url: safeMedia(r.image.url), alt: s(r.image.alt, 200), frame: pick(r.image.frame, ["none", "phone"] as const, "none") };
+        b.side = pick(r.side, ["left", "right"] as const, "right");
+        break;
+      case "cards":
+        b.heading = s(r.heading, 120); b.intro = s(r.intro, 1000); b.columns = pick(r.columns, ["2", "3"] as const, "3");
+        b.items = (Array.isArray(r.items) ? r.items : []).slice(0, 12).map((x: any) => ({
+          title: s(x?.title, 100), text: s(x?.text, 1000), img: safeMedia(x?.img), alt: s(x?.alt, 200), url: safeHref(x?.url), link_text: s(x?.link_text, 40),
+        })).filter((x: any) => x.title || x.text);
+        break;
     }
     blocks.push(b);
   }
@@ -223,6 +240,19 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
       return `<figure class="bk-video${yt ? " yt" : ""}">${inner}${b.caption ? `<figcaption>${esc(b.caption)}</figcaption>` : ""}</figure>`;
     }
     case "divider": return b.style === "space" ? `<div class="bk-space" aria-hidden="true"></div>` : `<hr class="bk-rule">`;
+    case "split": {
+      const btns = (b.buttons || []).map((x) => `<a class="bk-btn${x.style === "plain" ? " plain" : ""}" href="${esc(x.url)}"${ext(x.url)}>${esc(x.label)}</a>`).join("");
+      const pts = (b.points || []).length ? `<ul class="points bk-pts">${(b.points || []).map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
+      const media = b.image ? `<div class="bk-split-media${b.image.frame === "phone" ? " phone" : ""}">${img(r, b.image.url, b.image.alt, "(min-width: 860px) 40vw, 90vw")}</div>` : "";
+      if (!b.heading && !b.md && !media) return "";
+      return `<div class="bk-split${media ? " has-media" : ""} img-${b.side || "right"}"><div class="bk-split-text">${b.eyebrow ? `<div class="eyebrow">${esc(b.eyebrow)}</div>` : ""}${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}${b.md ? `<div class="prose">${markdown(b.md)}</div>` : ""}${pts}${btns ? `<div class="bk-btns">${btns}</div>` : ""}</div>${media}</div>`;
+    }
+    case "cards": {
+      const items = (b.items || []) as Array<{ title: string; text: string; img: string; alt: string; url: string; link_text: string }>;
+      if (!items.length) return "";
+      return `${b.heading ? `<h2 class="bk-h2">${esc(b.heading)}</h2>` : ""}${b.intro ? `<div class="prose bk-intro">${markdown(b.intro)}</div>` : ""}<div class="bk-cards cols-${b.columns || "3"}">${items.map((x) =>
+        `<article class="bk-card">${x.img ? `<div class="bk-cardimg">${img(r, x.img, x.alt, "(min-width: 860px) 300px, 90vw")}</div>` : ""}${x.title ? `<h3>${esc(x.title)}</h3>` : ""}${x.text ? `<div class="prose">${markdown(x.text)}</div>` : ""}${x.url ? `<a class="bk-cardlink" href="${esc(x.url)}"${ext(x.url)}>${esc(x.link_text || "Find out more")} <span aria-hidden="true">→</span></a>` : ""}</article>`).join("")}</div>`;
+    }
   }
   return "";
 }
@@ -255,6 +285,9 @@ export function blockProblems(b: Block): string[] {
   if (b.type === "faq" && !(b.items || []).length) out.push("Add a question and answer.");
   if (b.type === "links" && !(b.items || []).length) out.push("Add a link.");
   if (b.type === "video" && !b.url) out.push("Add a video file or a YouTube link.");
+  if (b.type === "split" && !b.heading && !b.md) out.push("Add a heading or some text.");
+  if (b.type === "split" && b.image && !b.image.alt) out.push("Describe the picture for people using screen readers.");
+  if (b.type === "cards" && !(b.items || []).length) out.push("Add a card.");
   if (b.type === "quote" && !b.text) out.push("Add the quote.");
   return out;
 }
