@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610081700";
+var VERSION = "202610081800";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
