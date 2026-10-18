@@ -1183,8 +1183,10 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       }
       if (s2 && !s3 && m === "PATCH") {
         const p = await get(s2);
-        if (!["draft", "failed"].includes(p.status) || p.zernio_id) {
-          if (p.status !== "draft") throw new HttpError(409, p.status === "scheduled" ? "This post is scheduled. Unschedule it to make changes." : "This post has gone out, so it can’t be changed. Duplicate it instead.");
+        // A post that failed everywhere never went out, so it can still be fixed (a new board, a new file) before
+        // Try again, which sends a fresh post built from it.
+        if (!["draft", "failed"].includes(p.status)) {
+          throw new HttpError(409, p.status === "scheduled" ? "This post is scheduled. Unschedule it to make changes." : "This post has gone out, so it can’t be changed. Duplicate it instead.");
         }
         const d = await body(req);
         const content = d.content !== undefined ? String(d.content).slice(0, 70000) : p.content;
