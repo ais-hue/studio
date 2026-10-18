@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610182150";
+var VERSION = "202610182345";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -2158,6 +2158,7 @@ function bulkEdit(host, sel, brand, accounts, done){
     ((tk||inUse.tiktok)?'<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">TikTok</legend><div class="fieldrow"><div class="field"><label for="beTkPriv">Who can see it</label><select id="beTkPriv"><option value="">Leave as it is</option></select></div></div>'+
       '<label class="check"><input type="checkbox" id="beTkOk"> By posting, I agree to TikTok’s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a> for each of these posts.</label>'+
       '<span class="hint">Only changes posts that go to TikTok. Posts marked as promoting your brand also fall under TikTok’s <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a>.</span></fieldset>':'')+
+    (accounts.some(function(a){return a.via==="studio"})?'<label class="check"><input type="checkbox" id="beStudio"> Post through Studio’s own connections instead of Zernio <span class="hint">('+esc(accounts.filter(function(a){return a.via==="studio"}).map(function(a){return platName(a.platform)}).join(", "))+')</span></label>':'')+
     '<div class="actions"><button class="btn sm primary" type="button" id="beGo">Preview changes</button><button class="btn sm ghost" type="button" id="beN">Cancel</button></div><div id="bePrev"></div></div>';
   $("#beN").onclick=function(){ host.innerHTML="" };
   if(pin) api("GET","social/accounts/"+pin._id+"/boards").then(function(d){ var s=$("#bePinBoard"); if(!s) return; s.innerHTML='<option value="">Leave as it is</option>'+d.boards.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>' }).join("") }).catch(function(){});
@@ -2173,6 +2174,7 @@ function bulkEdit(host, sel, brand, accounts, done){
     if(v("bePinBoard")) e.pinterest_board=v("bePinBoard");
     if(v("beTkPriv")) e.tiktok_privacy=v("beTkPriv");
     if($("#beTkOk")&&$("#beTkOk").checked) e.tiktok_consent=true;
+    if($("#beStudio")&&$("#beStudio").checked) e.use_studio=true;
     return e;
   }
   var lastEdit=null;

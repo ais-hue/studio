@@ -351,12 +351,33 @@ async function brandName(env: Env, profileId: string): Promise<string> {
   try { return (await listProfiles(env)).find((b) => b._id === profileId)?.name || ""; } catch { return ""; }
 }
 
+/** A draft made before the brand connected a platform through Studio still names the Zernio account; send it
+ * through Studio's own connection instead, and save that so the post shows where it really went. */
+async function preferStudio(env: Env, p: SocialPost): Promise<SocialPost> {
+  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []);
+  if (targets.every((t) => isDirect(t.accountId))) return p;
+  const own = await listDirect(env, p.profile_id);
+  let changed = false;
+  const next = targets.map((t) => {
+    if (isDirect(t.accountId)) return t;
+    const a = own.find((x) => x.platform === t.platform);
+    if (!a) return t;
+    changed = true;
+    return { platform: t.platform, accountId: a._id };
+  });
+  if (!changed) return p;
+  const json = JSON.stringify(next);
+  await env.DB.prepare("UPDATE social_posts SET targets = ?, updated_at = ? WHERE id = ?").bind(json, now(), p.id).run();
+  return { ...p, targets: json };
+}
+
 /** Send a post out: now, or at a time. Direct accounts are queued here; Zernio accounts are handed to Zernio. */
 export async function publish(env: Env, p: SocialPost, at: number | null): Promise<void> {
   const issues = problems(p);
   if (issues.length) throw new HttpError(400, issues[0]);
   if (["failed", "partial"].includes(p.status) && (p.zernio_id || (await hasDeliveries(env, p.id)))) return retry(env, p);
   if (p.status !== "draft") throw new HttpError(409, "This post has already been handed over. Unschedule it first to change it.");
+  p = await preferStudio(env, p);
   const parts = split(p);
   const t = now();
   await env.DB.prepare("UPDATE social_posts SET status = ?, scheduled_at = ?, error = NULL, results = '[]', zernio_status = NULL, zernio_results = NULL, zernio_id = NULL, published_at = NULL, updated_at = ? WHERE id = ?")
@@ -453,6 +474,7 @@ export interface BulkEdit {
   platforms_add?: string[]; platforms_remove?: string[];
   pinterest_link?: string; pinterest_board?: string;
   tiktok_privacy?: string; tiktok_consent?: boolean;  // only touches posts that go to TikTok
+  use_studio?: boolean;                       // move each platform onto the brand's own Studio connection, where it has one
 }
 const TIKTOK_PRIVACY = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"];
 
@@ -471,10 +493,11 @@ export function cleanEdit(d: any): BulkEdit {
     pinterest_link: s(d?.pinterest_link, 1000)?.trim(), pinterest_board: s(d?.pinterest_board, 80)?.trim(),
     tiktok_privacy: TIKTOK_PRIVACY.includes(String(d?.tiktok_privacy || "")) ? String(d.tiktok_privacy) : undefined,
     tiktok_consent: d?.tiktok_consent === true || undefined,
+    use_studio: d?.use_studio === true || undefined,
   };
   if (!e.find) { e.find = undefined; e.replace = undefined; }
   if (e.pinterest_link && !/^https:\/\//.test(e.pinterest_link)) throw new HttpError(400, "The Pinterest link needs to start with https://");
-  const any = e.find || e.start || e.end || e.tags_add!.length || e.tags_remove!.length || e.platforms_add!.length || e.platforms_remove!.length || e.pinterest_link !== undefined || e.pinterest_board || e.tiktok_privacy || e.tiktok_consent;
+  const any = e.find || e.start || e.end || e.tags_add!.length || e.tags_remove!.length || e.platforms_add!.length || e.platforms_remove!.length || e.pinterest_link !== undefined || e.pinterest_board || e.tiktok_privacy || e.tiktok_consent || e.use_studio;
   if (!any) throw new HttpError(400, "Say what to change first.");
   return e;
 }
@@ -518,6 +541,19 @@ export function applyEdit(p: SocialPost, e: BulkEdit, accounts: SocialAccount[],
   const content = editText(p.content, e);
   if (opts.captions && typeof opts.captions === "object") {
     for (const k of Object.keys(opts.captions)) if (opts.captions[k]) opts.captions[k] = editText(String(opts.captions[k]), e);
+  }
+  if (e.use_studio) {
+    const moved: string[] = [], left: string[] = [];
+    targets = targets.map((t) => {
+      if (isDirect(t.accountId)) return t;
+      const own = accounts.find((a) => a.platform === t.platform && isDirect(a._id));
+      if (!own) { left.push(PLATFORMS[t.platform]?.name || t.platform); return t; }
+      moved.push(PLATFORMS[t.platform]?.name || t.platform);
+      return { platform: t.platform, accountId: own._id };
+    });
+    if (moved.length) notes.push(`Now posts through Studio for ${moved.join(", ")}.`);
+    if (moved.includes(PLATFORMS.pinterest.name)) notes.push("Check the Pinterest board on these posts: boards picked through Zernio may not match.");
+    if (left.length) notes.push(`${left.join(", ")} isn’t connected through Studio for this brand yet, so it stays on Zernio.`);
   }
   for (const pl of e.platforms_remove || []) targets = targets.filter((t) => t.platform !== pl);
   for (const pl of e.platforms_add || []) {
