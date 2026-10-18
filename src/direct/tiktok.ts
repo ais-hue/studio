@@ -59,12 +59,12 @@ export const tiktok: Provider = {
   platform: "tiktok", label: "TikTok", kind: "oauth",
   setup: {
     console: "https://developers.tiktok.com/apps/",
-    note: "A TikTok developer app with Login Kit and the Content Posting API (Direct Post switched on). Scopes: user.info.basic, user.info.profile, video.publish, video.list. Until the audit, posts go out as private. For photo posts, verify files.<your domain> as a URL prefix.",
+    note: "A TikTok developer app with Login Kit and the Content Posting API (Direct Post switched on). Scopes: user.info.basic, user.info.profile, video.publish. Until the audit, posts go out as private. For photo posts, verify files.<your domain> as a URL prefix.",
     needsSecret: true,
   },
   authorize: (app, redirect, state) =>
     `https://www.tiktok.com/v2/auth/authorize/?${form({ client_key: app.client_id, response_type: "code", redirect_uri: redirect, state,
-      scope: "user.info.basic,user.info.profile,video.publish,video.list" })}`,
+      scope: "user.info.basic,user.info.profile,video.publish" })}`,
   async exchange(app, code, redirect): Promise<Connected> {
     const t = await tokens(app, { code, grant_type: "authorization_code", redirect_uri: redirect });
     let user: any = {};
