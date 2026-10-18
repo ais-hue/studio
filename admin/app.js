@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610081800";
+var VERSION = "202610181900";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -2423,7 +2423,7 @@ function socialPostView(pid){
           '<div class="actions"><label class="sr" for="spMove">New time</label><input type="datetime-local" id="spMove" style="width:auto"><button class="btn sm" type="button" id="spMoveGo">Move to this time</button></div>';
         if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
         html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
-          return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
+          return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+(x.error&&x.detail?'<details class="sub"><summary>Details</summary><code style="white-space:pre-wrap;word-break:break-all">'+esc(x.detail)+'</code></details>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
         if(p.status==="published"||p.status==="partial") html+='<section class="panel"><h2 class="sec">Results <span class="hint">from each platform, plus clicks and sign-ups from tracked links</span></h2><div id="spLinks"><div class="loading" style="padding:14px 18px">Loading…</div></div></section>';
         if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
         html+='</div><div class="proof"><div class="proofbar"><span class="url">preview</span></div><div id="spPrev" class="spprev"></div></div></div>';
