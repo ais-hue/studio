@@ -259,8 +259,8 @@ export function problems(p: SocialPost): string[] {
   return [...new Set(out)];
 }
 
-async function payload(env: Env, p: SocialPost) {
-  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []).filter((t) => !isDirect(t.accountId));
+async function payload(env: Env, p: SocialPost, only?: string[]) {
+  const targets = parse<Array<{ platform: string; accountId: string }>>(p.targets, []).filter((t) => !isDirect(t.accountId) && (!only || only.includes(t.platform)));
   const media = parse<Array<{ url: string; type: string }>>(p.media, []);
   const opts = parse<any>(p.options, {});
   const hasVideo = media.some((m) => m.type === "video");
@@ -328,6 +328,16 @@ function applyResult(post: any): { status: string; results: string; published_at
 
 /** Store the Zernio half of a post, then work out the post's overall status. */
 async function save(env: Env, pid: string, r: { status: string; results: string; published_at: number | null; error: string | null }, zid?: string) {
+  // A retry of only the failed platforms comes back as its own Zernio post that knows nothing of the platforms
+  // that already have it, so keep their earlier results. (A normal update lists every platform, so this is a no-op.)
+  const prev = await env.DB.prepare("SELECT zernio_results FROM social_posts WHERE id = ?").bind(pid).first<{ zernio_results: string | null }>();
+  const old = parse<Array<{ platform: string }>>(prev?.zernio_results || "[]", []);
+  const next = parse<Array<{ platform: string }>>(r.results, []);
+  if (next.length) {
+    const have = new Set(next.map((x) => x.platform));
+    const kept = old.filter((x) => !have.has(x.platform));
+    if (kept.length) r = { ...r, results: JSON.stringify([...kept, ...next]) };
+  }
   await env.DB.prepare(`UPDATE social_posts SET zernio_status = ?, zernio_results = ?, zernio_id = COALESCE(?, zernio_id), updated_at = ? WHERE id = ?`)
     .bind(r.status, r.results, zid || null, now(), pid).run();
   await combine(env, pid);
@@ -406,9 +416,12 @@ async function retry(env: Env, p: SocialPost): Promise<void> {
       const post = d.post || d;
       await save(env, p.id, applyResult(post), String(post._id || post.id || ""));
     } else {
-      // Some platforms already have it; a fresh post would repeat it there, so retry only the failed ones.
-      const d = await call(env, "POST", `/posts/${encodeURIComponent(p.zernio_id!)}/retry`);
-      await save(env, p.id, applyResult(d.post || d));
+      // Some platforms already have it. Zernio won't retry a post it counts as published, so send a fresh post
+      // to just the platforms that failed; save() keeps the results of the ones that already went out.
+      const failedOnly = [...new Set(zBad.map((r) => r.platform))];
+      const d = await call(env, "POST", "/posts", { ...(await payload(env, p, failedOnly)), publishNow: true });
+      const post = d.post || d;
+      await save(env, p.id, applyResult(post), String(post._id || post.id || ""));
     }
   }
   if (direct) { await combine(env, p.id); await runDeliveries(env, p.id); }
