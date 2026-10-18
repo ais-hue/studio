@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610181945";
+var VERSION = "202610182010";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -2422,7 +2422,7 @@ function socialPostView(pid){
         if(p.status==="scheduled") html+='<div class="notice"><p>Scheduled for <b>'+fmtDate(p.scheduled_at,true)+'</b>. To change the words or pictures, pull it back to a draft first.</p><button class="btn sm" type="button" id="spUnsched">Unschedule</button></div>'+
           '<div class="actions"><label class="sr" for="spMove">New time</label><input type="datetime-local" id="spMove" style="width:auto"><button class="btn sm" type="button" id="spMoveGo">Move to this time</button></div>';
         if(p.status==="publishing") html+='<div class="notice"><p>Going out now. This page updates when it’s done.</p></div>';
-        html+='<section class="panel"><h2 class="sec">Where it went</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
+        html+='<section class="panel"><h2 class="sec">Where it went'+((p.status==="failed"||p.status==="partial")&&p.updated_at?' <span class="hint">last tried '+esc(fmtDate(p.updated_at,true))+'</span>':'')+'</h2><div class="rows">'+(p.results.length?p.results:p.targets.map(function(t){return {platform:t.platform,status:p.status}})).map(function(x){
           return '<div class="rowi nosq"><span class="t">'+esc(platName(x.platform))+(x.error?'<small class="err">'+esc(x.error)+'</small>':'')+(x.error&&x.detail?'<details class="sub"><summary>Details</summary><code style="white-space:pre-wrap;word-break:break-all">'+esc(x.detail)+'</code></details>':'')+'</span><span class="meta">'+(x.url?'<a href="'+esc(x.url)+'" target="_blank" rel="noopener">View post</a>':'')+socialChip(x.status==="scheduled"?"scheduled":x.error?"failed":x.status)+'</span></div>' }).join("")+'</div></section>';
         if(p.status==="published"||p.status==="partial") html+='<section class="panel"><h2 class="sec">Results <span class="hint">from each platform, plus clicks and sign-ups from tracked links</span></h2><div id="spLinks"><div class="loading" style="padding:14px 18px">Loading…</div></div></section>';
         if(p.status==="failed"||p.status==="partial") html+='<div class="actions"><button class="btn primary" type="button" id="spRetry">Try again'+(p.status==="partial"?" where it failed":"")+'</button></div>';
@@ -2440,7 +2440,10 @@ function socialPostView(pid){
             (p.metrics_at?'<p class="hint" style="margin:10px 18px">Numbers from '+fmtDate(p.metrics_at,true)+'. They refresh every hour.</p>':'<p class="hint" style="margin:10px 18px">Likes and reach arrive within the hour after posting.</p>') }).catch(function(){});
         var mv=$("#spMoveGo"); if(mv) mv.onclick=function(){ var val=$("#spMove").value; if(!val){ toast("Pick a new date and time first.",true); return }
           api("POST","social/posts/"+pid+"/reschedule",{at:new Date(val).getTime()}).then(function(){ toast("Moved"); route() }).catch(function(e){ toast(e.message,true) }) };
-        var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ toast("Trying again"); route() }).catch(function(e){ toast(e.message,true); rt.disabled=false }) };
+        var rt=$("#spRetry"); if(rt) rt.onclick=function(){ this.disabled=true; rt.textContent="Trying…"; api("POST","social/posts/"+pid+"/publish",{}).then(function(){ return api("GET","social/posts/"+pid) }).then(function(r){ var q=r.post||r, bad=(q.results||[]).filter(function(x){return x.error});
+            if(q.status==="failed"||(q.status==="partial"&&bad.length)) toast("Still didn’t go out. "+bad.map(function(x){return platName(x.platform)+": "+x.error}).join(" · "),true);
+            else toast(q.status==="published"?"It went out":"Sent again, waiting for the platform");
+            route() }).catch(function(e){ toast(e.message,true); rt.disabled=false; rt.textContent="Try again" }) };
         if(p.status==="publishing"||(p.status==="scheduled"&&p.scheduled_at<Date.now()+120000)){ var poll=setInterval(route, 8000); S.cleanup.push(function(){ clearInterval(poll) }) }
         common(); return;
       }
