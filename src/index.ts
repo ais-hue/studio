@@ -12,13 +12,28 @@ import { finishConnect } from "./direct/engine";
 import { legalPage } from "./legal";
 import { serveFonts } from "./brandkit";
 
+// A fingerprint of the schema in this build. Each new copy of the worker reads one row to see whether the
+// database already has it, instead of re-running every CREATE and ALTER (about 8 seconds on a cold start,
+// long enough for Instagram, TikTok and Pinterest to give up fetching a video from files.<domain>).
+const SCHEMA_ID = (() => {
+  let h = 5381;
+  for (const ch of SCHEMA.concat(ALTERS).join("\n")) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0;
+  return h.toString(36);
+})();
+
 let schemaReady: Promise<unknown> | null = null;
 async function applySchema(env: Env) {
+  try {
+    const row = await env.DB.prepare("SELECT v FROM studio_meta WHERE k = 'schema'").first<{ v: string }>();
+    if (row?.v === SCHEMA_ID) return;
+  } catch { /* first run: the table isn't there yet */ }
   await env.DB.batch(SCHEMA.map((q) => env.DB.prepare(q)));
   for (const q of ALTERS) {
     try { await env.DB.prepare(q).run(); }
     catch (e) { if (!/duplicate column/i.test(String((e as Error)?.message || e))) throw e; }
   }
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS studio_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)").run();
+  await env.DB.prepare("INSERT INTO studio_meta (k, v) VALUES ('schema', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(SCHEMA_ID).run();
 }
 function ensureSchema(env: Env) {
   if (!schemaReady) schemaReady = applySchema(env).catch((e) => { schemaReady = null; throw e; });
@@ -78,11 +93,12 @@ export default {
     const host = url.hostname.toLowerCase();
     const root = env.ROOT_DOMAIN.toLowerCase();
     try {
+      // Files come straight from R2 and never touch the database, so they don't wait for the schema check.
+      if (host === `files.${root}`) return await serveFile(req, env, url);
       await ensureSchema(env);
       if (host === `studio.${root}` || (root === "localhost" && host === "localhost")) {
         return env.OAUTH_KV ? await studioProvider(env, studio).fetch(req, env, ctx) : await studio(req, env, ctx);
       }
-      if (host === `files.${root}`) return await serveFile(req, env, url);
       if (host.endsWith("." + root)) {
         const sub = host.slice(0, -(root.length + 1));
         if (!sub.includes(".")) return await handlePublic(req, env, ctx, host, sub);
