@@ -90,8 +90,10 @@ export const tiktok: Provider = {
           if (job.media.length > 1) throw new Permanent("TikTok takes one video, or photos only.");
           const { size } = await sizeOf(job.env, video.url);
           if (!size) throw new Permanent("Couldn’t tell how big the video is.");
-          const chunk = size < 5 * 1024 * 1024 ? size : CHUNK;
-          const count = Math.max(1, Math.floor(size / chunk));
+          // TikTok's rules: a chunk may not be bigger than the video, so a video up to CHUNK goes up whole in one
+          // piece; a bigger one goes in CHUNK pieces, and the last piece takes the remainder (up to 2 × CHUNK).
+          const chunk = size <= CHUNK ? size : CHUNK;
+          const count = size <= CHUNK ? 1 : Math.floor(size / chunk);
           const r = await tk<any>(acc, "/v2/post/publish/video/init/", {
             post_info: {
               title: job.text.slice(0, 2200), privacy_level: privacy,
