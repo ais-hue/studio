@@ -388,12 +388,18 @@ async function publishZernio(env: Env, p: SocialPost, at: number | null): Promis
 
 async function retry(env: Env, p: SocialPost): Promise<void> {
   const direct = await retryFailed(env, p.id);
-  const zFailed = p.zernio_id && ["failed", "partial"].includes((p as any).zernio_status || p.status);
+  // Judge the Zernio half by its platform results: Zernio's overall status for a post that failed everywhere
+  // isn't always "failed", and checking only that made Try again silently do nothing.
+  const zr = parse<Array<{ platform: string; status: string; url?: string | null; error?: string | null }>>((p as any).zernio_results || "[]", []);
+  const zBad = zr.filter((r) => r.error || r.status === "failed" || r.status === "error");
+  const zOut = zr.filter((r) => !r.error && (r.url || r.status === "published"));
+  const zFailed = !!p.zernio_id && (zBad.length > 0 || ["failed", "partial", "error"].includes(String((p as any).zernio_status || "")));
+  if (!direct && !zFailed) throw new HttpError(409, "Studio found nothing to try again on this post. Duplicate it and post the copy instead.");
   if (zFailed) {
     if (await mock(env)) {
-      const zr = parse<any[]>((p as any).zernio_results || p.results, []).map((r) => ({ ...r, status: "published", error: null }));
-      await save(env, p.id, { status: "published", results: JSON.stringify(zr), published_at: now(), error: null });
-    } else if (((p as any).zernio_status || p.status) === "failed") {
+      const done = zr.map((r) => ({ ...r, status: "published", error: null }));
+      await save(env, p.id, { status: "published", results: JSON.stringify(done), published_at: now(), error: null });
+    } else if (!zOut.length) {
       // Nothing went out through Zernio, so send a fresh post built from the post as it is now. Zernio's own
       // retry would resend the old request unchanged, including whatever was wrong with it.
       const d = await call(env, "POST", "/posts", { ...(await payload(env, p)), publishNow: true });

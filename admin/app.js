@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610182010";
+var VERSION = "202610182115";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -2408,7 +2408,7 @@ function socialPostView(pid){
     var p=r.post;
     return Promise.all([api("GET","social/brands"), api("GET","social/brands/"+p.profile_id+"/accounts")]).then(function(rr){
       var brand=rr[0].brands.filter(function(b){return b._id===p.profile_id})[0]||{name:"Brand",_id:p.profile_id}, accounts=rr[1].accounts;
-      var v=$("#view"), editable=p.status==="draft";
+      var v=$("#view"), editable=p.status==="draft"||p.status==="failed";
       var sel=function(){ return p.targets.map(function(t){return t.platform}) };
       var acctFor=function(pl){ return accounts.filter(function(a){return a.platform===pl})[0] };
       var where=function(){ return sel().map(platName).join(", ") };
