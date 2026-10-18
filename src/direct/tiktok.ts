@@ -64,7 +64,7 @@ export const tiktok: Provider = {
   },
   authorize: (app, redirect, state) =>
     `https://www.tiktok.com/v2/auth/authorize/?${form({ client_key: app.client_id, response_type: "code", redirect_uri: redirect, state,
-      scope: "user.info.basic,user.info.profile,video.publish" })}`,
+      scope: "user.info.basic,user.info.profile,video.publish", disable_auto_auth: "1" })}`,
   async exchange(app, code, redirect): Promise<Connected> {
     const t = await tokens(app, { code, grant_type: "authorization_code", redirect_uri: redirect });
     let user: any = {};
