@@ -1,5 +1,5 @@
-import { Env, HttpError, id, now } from "./util";
-import { trackText } from "./links";
+import { Env, HttpError, id, now, slugify } from "./util";
+import { trackText, tagUrl } from "./links";
 import { tagFor } from "./initiatives";
 import { storeBytes, fileUrl } from "./files";
 import {
@@ -276,7 +276,9 @@ async function payload(env: Env, p: SocialPost) {
     if (track) {
       const ctx = { source_type: "social", source_id: p.id, platform: t.platform, profile_id: p.profile_id, campaign: campaignTag || brand };
       text = await trackText(env, text, ctx);
-      if (t.platform === "pinterest" && pinLink) pinLink = (await trackText(env, pinLink, ctx)).trim();
+      // Pinterest rejects URL shorteners as a pin's destination, so the pin link gets its UTM tags directly
+      // instead of becoming a go.<domain>/l/ link. Pinterest's own analytics count the outbound clicks.
+      if (t.platform === "pinterest" && pinLink) pinLink = tagUrl(env, pinLink.trim(), { utm_source: "pinterest", utm_medium: "social", utm_campaign: slugify(ctx.campaign, 40) || "studio" });
     }
     if (text !== p.content) custom[t.platform] = text;
   }
@@ -301,11 +303,22 @@ async function payload(env: Env, p: SocialPost) {
   };
 }
 
+/** Anything Zernio says about a failure beyond the one-line message (codes, the platform's own response), kept short. */
+function errorDetail(x: any): string | null {
+  if (!x || !x.errorMessage) return null;
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(x)) if (/error|reason|code|response|detail/i.test(k) && k !== "errorMessage" && v != null && v !== "") extra[k] = v;
+  if (!Object.keys(extra).length) return null;
+  const t = JSON.stringify(extra);
+  return t.length > 1500 ? t.slice(0, 1500) + "…" : t;
+}
+
 function applyResult(post: any): { status: string; results: string; published_at: number | null; error: string | null } {
   const plats: any[] = Array.isArray(post?.platforms) ? post.platforms : [];
   const results = plats.map((x) => ({
     platform: String(x.platform), status: String(x.status || post.status || ""),
     url: x.platformPostUrl ? String(x.platformPostUrl) : null, error: x.errorMessage ? String(x.errorMessage) : null,
+    detail: errorDetail(x),
   }));
   let status = String(post?.status || "scheduled");
   if (status === "cancelled") status = "draft";
@@ -380,7 +393,14 @@ async function retry(env: Env, p: SocialPost): Promise<void> {
     if (await mock(env)) {
       const zr = parse<any[]>((p as any).zernio_results || p.results, []).map((r) => ({ ...r, status: "published", error: null }));
       await save(env, p.id, { status: "published", results: JSON.stringify(zr), published_at: now(), error: null });
+    } else if (((p as any).zernio_status || p.status) === "failed") {
+      // Nothing went out through Zernio, so send a fresh post built from the post as it is now. Zernio's own
+      // retry would resend the old request unchanged, including whatever was wrong with it.
+      const d = await call(env, "POST", "/posts", { ...(await payload(env, p)), publishNow: true });
+      const post = d.post || d;
+      await save(env, p.id, applyResult(post), String(post._id || post.id || ""));
     } else {
+      // Some platforms already have it; a fresh post would repeat it there, so retry only the failed ones.
       const d = await call(env, "POST", `/posts/${encodeURIComponent(p.zernio_id!)}/retry`);
       await save(env, p.id, applyResult(d.post || d));
     }

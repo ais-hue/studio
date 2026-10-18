@@ -111,6 +111,13 @@ function postView(env: Env, p: SocialPost) {
     why: (p as any).note || null,
     published_at: p.published_at ? new Date(p.published_at).toISOString() : null,
     still_needed: problems(p),
+    ...(["failed", "partial"].includes(p.status) ? {
+      error: p.error || null,
+      platform_results: JSON.parse(p.results || "[]").map((r: any) => ({
+        platform: PLATFORMS[r.platform]?.name || r.platform, status: r.error ? "failed" : r.status, error: r.error || null,
+        ...(r.detail ? { detail: r.detail } : {}), ...(r.url ? { url: r.url } : {}),
+      })),
+    } : {}),
   };
 }
 
