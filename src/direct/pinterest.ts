@@ -9,7 +9,21 @@ import { bytes, sizeOf } from "./media";
  */
 
 const DAY = 864e5;
-const base = (app: App) => app.options?.sandbox ? "https://api-sandbox.pinterest.com/v5" : "https://api.pinterest.com/v5";
+const PROD = "https://api.pinterest.com/v5", SANDBOX = "https://api-sandbox.pinterest.com/v5";
+/*
+ * Trial access can't create pins in production, and Pinterest's sandbox doesn't accept the token from the
+ * normal sign-in, only a sandbox token generated on the app's page in the developer portal. So with "sandbox"
+ * on, Studio still signs people in the normal way (and reads who they are from production), but reads boards
+ * and makes pins in the sandbox with that sandbox token.
+ */
+const sandboxed = (app: App) => !!app.options?.sandbox;
+const base = (app: App) => sandboxed(app) ? SANDBOX : PROD;
+const bearer = (app: App, acc: Account) => {
+  if (!sandboxed(app)) return acc.token;
+  const t = String(app.options?.sandboxToken || "");
+  if (!t) throw new Permanent("Pinterest is set to post to its sandbox, but no sandbox token is saved. Add one in Settings → Social posting → Pinterest.");
+  return t;
+};
 
 const pinError = (status: number, body: any): Error | null => {
   if (status < 400) return null;
@@ -21,7 +35,7 @@ const pinError = (status: number, body: any): Error | null => {
 };
 
 const pin = <T = any>(app: App, acc: Account, path: string, init: RequestInit = {}) => call<T>("Pinterest", base(app) + path, {
-  ...init, headers: { authorization: `Bearer ${acc.token}`, ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers || {}) },
+  ...init, headers: { authorization: `Bearer ${bearer(app, acc)}`, ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers || {}) },
 }, pinError);
 
 async function tokens(app: App, params: Record<string, string>): Promise<Tokens> {
@@ -47,6 +61,11 @@ export async function boards(app: App, acc: Account): Promise<Array<{ id: string
     bookmark = d.bookmark || "";
     if (!bookmark) break;
   }
+  // The sandbox starts with no boards, and a pin needs one, so give it one to pin to.
+  if (!out.length && sandboxed(app)) {
+    const b = await pin<any>(app, acc, "/boards", { method: "POST", body: JSON.stringify({ name: "Studio sandbox", description: "Test pins from Studio while the app has trial access." }) });
+    out.push({ id: String(b.id), name: String(b.name || "Studio sandbox") });
+  }
   return out;
 }
 
@@ -54,7 +73,7 @@ export const pinterest: Provider = {
   platform: "pinterest", label: "Pinterest", kind: "oauth",
   setup: {
     console: "https://developers.pinterest.com/apps/",
-    note: "A Pinterest developer app. Scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read. With trial access, tick “Sandbox”: pins then only appear in Pinterest’s sandbox. Request Standard access with a short video of connecting and pinning from Studio.",
+    note: "A Pinterest developer app. Scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read. With trial access, tick “Sandbox” and paste a sandbox token (the app’s page → Generate token → Sandbox): pins then only appear in Pinterest’s sandbox. Request Standard access with a short video of connecting and pinning from Studio.",
     needsSecret: true,
   },
   authorize: (app, redirect, state) =>
@@ -62,7 +81,7 @@ export const pinterest: Provider = {
       scope: "boards:read,boards:write,pins:read,pins:write,user_accounts:read" })}`,
   async exchange(app, code, redirect): Promise<Connected> {
     const t = await tokens(app, { grant_type: "authorization_code", code, redirect_uri: redirect, continuous_refresh: "true" });
-    const me = await call<any>("Pinterest", base(app) + "/user_account", { headers: { authorization: `Bearer ${t.token}` } }, pinError);
+    const me = await call<any>("Pinterest", PROD + "/user_account", { headers: { authorization: `Bearer ${t.token}` } }, pinError);
     return { ...t, external_id: String(me.id || me.username), username: String(me.username || ""), display_name: String(me.business_name || me.username || ""), picture: String(me.profile_image || "") };
   },
   needsRefresh: (acc, t) => !!acc.expires_at && acc.expires_at - t < 5 * DAY,

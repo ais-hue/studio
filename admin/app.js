@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610190015";
+var VERSION = "202610190105";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -2916,14 +2916,15 @@ function settingsView(){
       host.innerHTML='<form class="sheet" style="margin:0 18px 16px" autocomplete="off"><p class="hint" style="margin:0">'+esc(a.note)+' <a href="'+esc(a.console)+'" target="_blank" rel="noopener">Open the developer console</a></p>'+
         '<div class="field"><label>Redirect URI <span class="hint">(paste this into the app’s settings)</span></label><div class="affix"><input type="text" readonly value="'+esc(a.redirect)+'" data-copyv><button class="btn sm" type="button" data-copy style="border:0;border-left:1px solid var(--line)">Copy</button></div></div>'+
         '<div class="fieldrow"><div class="field"><label for="ac-'+a.platform+'">App ID</label><input type="text" id="ac-'+a.platform+'" maxlength="200" spellcheck="false" value="'+esc(a.client_id)+'"></div>'+
-        '<div class="field"><label for="as-'+a.platform+'">App secret</label><input type="password" id="as-'+a.platform+'" maxlength="300" spellcheck="false" placeholder="'+(a.configured?"Saved. Paste a new one to replace it":"")+'"></div></div>'+
-        (a.platform==="pinterest"?'<label class="actions" style="gap:8px"><input type="checkbox" id="asb-'+a.platform+'"'+(a.options.sandbox?" checked":"")+'> Trial access: post to Pinterest’s sandbox</label>':'')+
+        '<div class="field"><label for="as-'+a.platform+'">App secret</label><input type="password" id="as-'+a.platform+'" maxlength="300" spellcheck="false" autocomplete="new-password" placeholder="'+(a.configured?"Saved. Paste a new one to replace it":"")+'"></div></div>'+
+        (a.platform==="pinterest"?'<label class="actions" style="gap:8px"><input type="checkbox" id="asb-'+a.platform+'"'+(a.options.sandbox?" checked":"")+'> Trial access: post to Pinterest’s sandbox</label>'+
+          '<div class="field"><label for="ast-'+a.platform+'">Sandbox token</label><input type="password" id="ast-'+a.platform+'" maxlength="400" spellcheck="false" autocomplete="off" placeholder="'+(a.options.hasSandboxToken?"Saved. Paste a new one to replace it":"From the app’s page: Generate token → Sandbox")+'"><span class="hint">Pinterest’s sandbox only takes this token, not the normal sign-in. Tokens from the portal expire, so paste a fresh one if pins start failing.</span></div>':'')+
         '<div class="actions"><button class="btn primary sm" type="submit">Save</button>'+(a.configured?'<button class="btn ghost sm" type="button" data-rm>Remove</button>':'')+'</div></form>';
       var f=host.querySelector("form");
       host.querySelector("[data-copy]").onclick=function(){ var i=host.querySelector("[data-copyv]"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).then(function(){ toast("Copied") },function(){ document.execCommand("copy"); toast("Copied") }) };
       var sendApp=function(body, msg){ return api("PUT","social/apps/"+a.platform, body).then(function(){ toast(msg); route() }).catch(function(e){ toast(e.message,true) }) };
       f.onsubmit=function(e){ e.preventDefault(); var sb=$("#asb-"+a.platform);
-        sendApp({client_id:$("#ac-"+a.platform).value.trim(), secret:$("#as-"+a.platform).value.trim(), options:{sandbox:!!(sb&&sb.checked)}}, a.label+" app saved") };
+        sendApp({client_id:$("#ac-"+a.platform).value.trim(), secret:$("#as-"+a.platform).value.trim(), options:{sandbox:!!(sb&&sb.checked), sandboxToken:($("#ast-"+a.platform)?$("#ast-"+a.platform).value.trim():"")}}, a.label+" app saved") };
       var rm=host.querySelector("[data-rm]"); if(rm) rm.onclick=function(){ sendApp({client_id:""}, a.label+" app removed") };
     } });
   });

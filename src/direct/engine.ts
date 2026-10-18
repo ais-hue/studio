@@ -31,7 +31,9 @@ interface AppRow { platform: string; client_id: string; secret: string; options:
 export async function getApp(env: Env, platform: string): Promise<App | null> {
   const r = await env.DB.prepare("SELECT * FROM social_apps WHERE platform = ?").bind(platform).first<AppRow>();
   if (!r) return null;
-  return { platform, client_id: r.client_id, secret: await open(env, r.secret), options: parse(r.options, {}) };
+  const options = parse<Record<string, any>>(r.options, {});
+  if (options.sandboxTokenSealed) { options.sandboxToken = await open(env, options.sandboxTokenSealed); delete options.sandboxTokenSealed; }
+  return { platform, client_id: r.client_id, secret: await open(env, r.secret), options };
 }
 
 /** Is posting to this platform set up to go straight from Studio? */
@@ -40,6 +42,12 @@ export async function directReady(env: Env, platform: string): Promise<boolean> 
   if (!p) return false;
   if (p.kind === "password") return true;
   return !!(await env.DB.prepare("SELECT 1 FROM social_apps WHERE platform = ?").bind(platform).first());
+}
+
+/** App options as the browser sees them: secrets stay sealed on the server; only whether one is saved. */
+function publicOptions(o: Record<string, any>) {
+  const { sandboxTokenSealed, ...rest } = o || {};
+  return { ...rest, hasSandboxToken: !!sandboxTokenSealed };
 }
 
 export async function appsStatus(env: Env, origin: string) {
@@ -51,7 +59,7 @@ export async function appsStatus(env: Env, origin: string) {
     return {
       platform: p.platform, label: p.label, kind: p.kind, console: p.setup.console, note: p.setup.note, needsSecret: p.setup.needsSecret,
       redirect: p.kind === "oauth" ? redirectUri(origin, p.platform) : null,
-      configured: p.kind === "password" || !!r, client_id: r?.client_id || "", options: parse(r?.options, {}),
+      configured: p.kind === "password" || !!r, client_id: r?.client_id || "", options: publicOptions(parse(r?.options, {})),
       accounts: c?.n || 0, needsReconnect: c?.bad || 0,
     };
   });
@@ -71,7 +79,12 @@ export async function saveApp(env: Env, platform: string, d: { client_id?: strin
   if (!/^[\w.\-:]{4,200}$/.test(client)) throw new HttpError(400, "That app ID doesn’t look right.");
   const secret = String(d.secret || "").trim();
   if (!secret && !existing) throw new HttpError(400, "Paste the app secret too.");
-  const options = { sandbox: !!d.options?.sandbox };
+  const prevOptions = parse<Record<string, any>>((await env.DB.prepare("SELECT options FROM social_apps WHERE platform = ?").bind(platform).first<{ options: string }>())?.options, {});
+  const options: Record<string, unknown> = { sandbox: !!d.options?.sandbox };
+  // A sandbox token is a secret: sealed like the app secret, and kept when the form leaves it blank.
+  const sbt = String(d.options?.sandboxToken || "").trim();
+  if (sbt) options.sandboxTokenSealed = await seal(env, sbt);
+  else if (prevOptions.sandboxTokenSealed && d.options?.clearSandboxToken !== true) options.sandboxTokenSealed = prevOptions.sandboxTokenSealed;
   await env.DB.prepare(`INSERT INTO social_apps (platform, client_id, secret, options, updated_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(platform) DO UPDATE SET client_id = excluded.client_id, secret = excluded.secret, options = excluded.options, updated_at = excluded.updated_at`)
     .bind(platform, client, secret ? await seal(env, secret) : existing!.secret, JSON.stringify(options), now()).run();
