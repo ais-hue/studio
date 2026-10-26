@@ -99,6 +99,11 @@ export default {
       if (host === `studio.${root}` || (root === "localhost" && host === "localhost")) {
         return env.OAUTH_KV ? await studioProvider(env, studio).fetch(req, env, ctx) : await studio(req, env, ctx);
       }
+      // The bare domain and www. are connected to a site like any other domain (Site settings → Domains).
+      if (host === `www.${root}`) {
+        const custom = await handleCustomHost(req, env, ctx, host);
+        if (custom) return custom;
+      }
       if (host.endsWith("." + root)) {
         const sub = host.slice(0, -(root.length + 1));
         if (!sub.includes(".")) return await handlePublic(req, env, ctx, host, sub);

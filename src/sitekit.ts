@@ -88,7 +88,8 @@ export function cleanHost(env: Env, raw: unknown): string {
   let h = String(raw ?? "").trim().toLowerCase().replace(/^[a-z]+:\/\//, "").split(/[/?#]/)[0].replace(/:\d+$/, "").replace(/\.$/, "");
   if (!/^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/.test(h)) throw new HttpError(400, "That doesn’t look like a domain. Try something like ciunas.app.");
   const root = env.ROOT_DOMAIN.toLowerCase();
-  if (h === root || h.endsWith("." + root)) throw new HttpError(400, `Addresses on ${root} are set on the site itself, not here.`);
+  // The bare root domain (and its www.) can belong to one site: the main site at aisling.online.
+  if (h !== root && h !== `www.${root}` && h.endsWith("." + root)) throw new HttpError(400, `Addresses on ${root} are set on the site itself, not here.`);
   return h;
 }
 

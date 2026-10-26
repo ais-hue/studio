@@ -22,9 +22,10 @@
     { "binding": "DB", "database_name": "studio", "migrations_dir": "migrations" }
   ],
   // Every subdomain of aisling.online (studio., go., and each site) is served by this worker.
-  // The apex and www are not matched, so the existing GoDaddy page is untouched.
+  // The bare domain is served too: connect it to a site in Site settings → Domains (www. redirects to it).
   "routes": [
     { "pattern": "*.aisling.online/*", "zone_name": "aisling.online" },
+    { "pattern": "aisling.online/*", "zone_name": "aisling.online" },
     // Sites' own domains: each needs its zone in this Cloudflare account and proxied (orange cloud) DNS records.
     { "pattern": "ciunas.app/*", "zone_name": "ciunas.app" },
     { "pattern": "www.ciunas.app/*", "zone_name": "ciunas.app" }
