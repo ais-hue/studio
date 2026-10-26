@@ -10,7 +10,7 @@ import type { Content, Page } from "./render";
  * into blocks when it is opened in the block editor.
  */
 
-export const BLOCK_TYPES = ["hero", "text", "split", "cards", "image", "gallery", "store", "features", "quote", "faq", "signup", "links", "video", "divider"] as const;
+export const BLOCK_TYPES = ["hero", "text", "split", "cards", "image", "gallery", "store", "features", "quote", "faq", "signup", "links", "video", "divider", "timeline"] as const;
 export type BlockType = typeof BLOCK_TYPES[number];
 
 export interface Img { url: string; alt: string }
@@ -44,7 +44,7 @@ export const safeHref = (u: unknown) => { const x = s(u, 1000); return /^(https:
 const safeMedia = (u: unknown) => { const x = s(u, 1000); return /^https:\/\//i.test(x) ? x : ""; };
 const bid = (v: unknown) => { const x = String(v ?? "").replace(/[^a-z0-9_-]/gi, "").slice(0, 24); return x || "b" + Math.random().toString(36).slice(2, 10); };
 
-const SECTIONED: BlockType[] = ["cards", "features", "faq", "signup", "store", "links", "quote"];
+const SECTIONED: BlockType[] = ["cards", "features", "faq", "signup", "store", "links", "quote", "timeline"];
 
 /** Headings may mark a word for emphasis with *asterisks*, shown in the brand's emphasis style. */
 export const emph = (t: string) => esc(t).replace(/\*([^*\n]{1,80})\*/g, "<em>$1</em>");
@@ -107,6 +107,12 @@ export function cleanBlocks(input: any): BlocksContent {
         b.url = youtubeId(u) ? u : safeMedia(u); b.poster = safeMedia(r.poster); b.caption = s(r.caption, 200); break;
       }
       case "divider": b.style = pick(r.style, ["space", "rule"] as const, "rule"); break;
+      case "timeline":
+        b.heading = s(r.heading, 120);
+        b.items = (Array.isArray(r.items) ? r.items : []).slice(0, 30).map((x: any) => ({
+          title: s(x?.title, 120), org: s(x?.org, 120), when: s(x?.when, 60), where: s(x?.where, 80), md: s(x?.md, 3000),
+        })).filter((x: any) => x.title || x.org);
+        break;
       case "split":
         b.eyebrow = s(r.eyebrow, 80); b.heading = s(r.heading, 160); b.md = s(r.md, 4000);
         b.points = (Array.isArray(r.points) ? r.points : String(r.points ?? "").split("\n")).map((x: unknown) => s(x, 160)).filter(Boolean).slice(0, 8);
@@ -251,6 +257,13 @@ function block(b: Block, r: BlockRender, first: { hero: boolean }): string {
         : `<video controls playsinline preload="metadata"${b.poster ? ` poster="${esc(b.poster)}"` : ""} src="${esc(b.url)}"></video>`;
       return `<figure class="bk-video${yt ? " yt" : ""}">${inner}${b.caption ? `<figcaption>${esc(b.caption)}</figcaption>` : ""}</figure>`;
     }
+    case "timeline": {
+      const items = (b.items || []) as Array<{ title: string; org: string; when: string; where: string; md: string }>;
+      if (!items.length) return "";
+      return `${b.heading ? `<h2 class="bk-h2">${emph(b.heading)}</h2>` : ""}<ol class="bk-tl">${items.map((x) =>
+        `<li class="bk-tl-item"><div class="bk-tl-when">${x.when ? `<span>${esc(x.when)}</span>` : ""}${x.where ? `<span class="bk-tl-where">${esc(x.where)}</span>` : ""}</div>` +
+        `<div class="bk-tl-body">${x.title ? `<h3>${esc(x.title)}</h3>` : ""}${x.org ? `<p class="bk-tl-org">${esc(x.org)}</p>` : ""}${x.md ? `<div class="prose">${markdown(x.md)}</div>` : ""}</div></li>`).join("")}</ol>`;
+    }
     case "divider": return b.style === "space" ? `<div class="bk-space" aria-hidden="true"></div>` : `<hr class="bk-rule">`;
     case "split": {
       const btns = (b.buttons || []).map((x) => `<a class="bk-btn${x.style === "plain" ? " plain" : ""}" href="${esc(x.url)}"${ext(x.url)}>${esc(x.label)}</a>`).join("");
@@ -303,6 +316,7 @@ export function blockProblems(b: Block): string[] {
   if (b.type === "split" && b.image && !b.image.alt) out.push("Describe the picture for people using screen readers.");
   if (b.type === "cards" && !(b.items || []).length) out.push("Add a card.");
   if (b.type === "quote" && !b.text) out.push("Add the quote.");
+  if (b.type === "timeline" && !(b.items || []).length) out.push("Add an entry.");
   return out;
 }
 

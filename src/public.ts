@@ -7,6 +7,7 @@ import { handleResendWebhook } from "./hooks";
 import { followLink } from "./links";
 import { formToObject, handleFormPublic, loadForm, submitForm } from "./forms";
 import { domainFor, findRedirect, primaryHost } from "./sitekit";
+import { PRIVATE_HEADERS, gate, passes } from "./gate";
 
 export async function serveStatic(req: Request, env: Env, path: string): Promise<Response> {
   const url = new URL(req.url);
@@ -121,6 +122,7 @@ async function subscribe(req: Request, env: Env, ctx: ExecutionContext, host: st
   if (!page) return reply(404, { error: "This form has been taken down." });
   const site = await env.DB.prepare("SELECT * FROM sites WHERE id = ?").bind(page.site_id).first<Site>();
   if (!site || !(await servesSite(env, host, site))) return reply(400, { error: "This form belongs to a different site." });
+  if (!(await passes(req, env, site.id))) return reply(401, { error: "This site is private. Open it with its password first." });
   const back = new URL(req.headers.get("referer") || `https://${host}/`);
 
   // A custom form placed on the page.
@@ -283,6 +285,20 @@ export async function handleCustomHost(req: Request, env: Env, ctx: ExecutionCon
 async function serveSite(req: Request, env: Env, ctx: ExecutionContext, url: URL, host: string, site: Site, base: RenderOpts, canonicalHost: string | null): Promise<Response> {
   const p = url.pathname;
   const canonHost = canonicalHost || host;
+  // Password-protected sites: nothing below runs until the visitor has entered the password.
+  const g = await gate(req, env, url, site, { ...base, path: p.replace(/\/+$/, "") || "/", brand: await styleFor(env, site) });
+  if (g.res) return g.res;
+  if (g.locked) {
+    const res = await serveOpen(req, env, ctx, url, host, site, base, canonHost);
+    const out = new Response(res.body, res);
+    for (const [k, v] of Object.entries(PRIVATE_HEADERS)) out.headers.set(k, v);
+    return out;
+  }
+  return serveOpen(req, env, ctx, url, host, site, base, canonHost);
+}
+
+async function serveOpen(req: Request, env: Env, ctx: ExecutionContext, url: URL, host: string, site: Site, base: RenderOpts, canonHost: string): Promise<Response> {
+  const p = url.pathname;
   if (p === "/robots.txt") return new Response(`User-agent: *\nAllow: /\nSitemap: https://${canonHost}/sitemap.xml\n`, { headers: { "content-type": "text/plain" } });
   if (p === "/sitemap.xml") {
     const { results } = await env.DB.prepare("SELECT slug, updated_at FROM pages WHERE site_id = ? AND published = 1 ORDER BY slug").bind(site.id).all<{ slug: string; updated_at: number }>();

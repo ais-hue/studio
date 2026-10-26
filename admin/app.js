@@ -20,7 +20,7 @@ var TEMPLATES = {
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610190105";
+var VERSION = "202610261500";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -69,7 +69,7 @@ function refreshNav(){
   api("GET","review/count").then(function(d){ var el=$("#navReview"); if(el) el.textContent=d.n||"" }).catch(function(){});
   return Promise.all([api("GET","sites"), api("GET","overview"), api("GET","campaigns"), api("GET","sequences")]).then(function(r){
     S.sites=r[0].sites;
-    $("#navSites").innerHTML=r[0].sites.map(function(s){ return '<a class="site" href="#/sites/'+esc(s.id)+'" data-site="'+esc(s.id)+'" style="--sw:var(--s-'+esc(s.accent)+')"><i></i><span>'+esc(s.name)+'</span></a>' }).join("");
+    $("#navSites").innerHTML=r[0].sites.map(function(s){ return '<a class="site" href="#/sites/'+esc(s.id)+'" data-site="'+esc(s.id)+'" style="--sw:var(--s-'+esc(s.accent)+')"><i></i><span>'+esc(s.name)+'</span>'+(s.locked?'<svg class="lk" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Password protected"><title>Password protected</title><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>':'')+'</a>' }).join("");
     $("#navContacts").textContent = r[1].counts.subscribed || "";
     var drafts=r[2].campaigns.filter(function(c){return c.status==="draft"}).length;
     $("#navEmails").textContent = drafts ? drafts+" draft"+(drafts===1?"":"s") : "";
@@ -373,9 +373,10 @@ var BLOCK_DEFS = {
   signup:{name:"Signup", blurb:"Collect emails for a list"},
   links:{name:"Links", blurb:"A stack of link buttons"},
   video:{name:"Video", blurb:"A video file or YouTube link"},
-  divider:{name:"Divider", blurb:"A line or a gap"}
+  divider:{name:"Divider", blurb:"A line or a gap"},
+  timeline:{name:"Timeline", blurb:"Roles, dates and what happened"}
 };
-var BLOCK_ORDER=["hero","text","split","cards","image","gallery","store","features","quote","faq","signup","links","video","divider"];
+var BLOCK_ORDER=["hero","text","split","cards","image","gallery","store","features","quote","faq","signup","links","timeline","video","divider"];
 function newBlockId(){ return "b"+Math.random().toString(36).slice(2,10) }
 function blankBlock(type){
   var b={id:newBlockId(), type:type, bg:"page", space:"normal"};
@@ -387,6 +388,7 @@ function blankBlock(type){
   if(type==="links") b.items=[{label:"",url:""}];
   if(type==="signup"){ b.heading="Get the news"; b.cta="Keep me posted" }
   if(type==="divider") b.style="rule";
+  if(type==="timeline"){ b.heading="Experience"; b.items=[{title:"",org:"",when:"",where:"",md:""}] }
   if(type==="image") b.width="column";
   if(type==="split"){ b.heading=""; b.md=""; b.points=[]; b.buttons=[]; b.side="right" }
   if(type==="cards"){ b.columns="3"; b.items=[{title:"",text:""},{title:"",text:""},{title:"",text:""}] }
@@ -411,6 +413,7 @@ function blockNeeds(b){
   if(b.type==="links"&&!it.some(function(x){return x.label&&x.url})) return "Add a link";
   if(b.type==="video"&&!b.url) return "Add a video";
   if(b.type==="quote"&&!b.text) return "Add the quote";
+  if(b.type==="timeline"&&!it.some(function(x){return x.title||x.org})) return "Add an entry";
   if(b.type==="split"&&!b.heading&&!b.md) return "Add a heading or text";
   if(b.type==="split"&&b.image&&b.image.url&&!b.image.alt) return "Describe the picture";
   if(b.type==="cards"&&!it.some(function(x){return x.title||x.text})) return "Add a card";
@@ -489,7 +492,7 @@ function blockEditor(host, site, p, onConverted){
       (items.length<max?'<button type="button" class="btn sm" data-rowadd="'+key+'">'+esc(addLabel)+'</button>':'')+'</div>' }
 
   function fieldsFor(b){
-    var h="", sectioned=["cards","features","faq","signup","store","links","quote"].indexOf(b.type)>-1;
+    var h="", sectioned=["cards","features","faq","signup","store","links","quote","timeline"].indexOf(b.type)>-1;
     if(sectioned) h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. The apps"});
     if(b.type==="hero"){
       h+=txt(b,"eyebrow","Small line above",{max:80,ph:"e.g. Out now on iPhone"})+txt(b,"headline","Headline",{max:160,hint:"Put *stars* round a word to give it the brand’s emphasis."})+txt(b,"sub","Line under it",{area:true,rows:2,max:400});
@@ -528,6 +531,7 @@ function blockEditor(host, site, p, onConverted){
     }
     if(b.type==="links") h+=txt(b,"heading","Heading",{max:120})+rows(b,"items",[["label","Words",{max:80}],["url","Goes to",{max:1000,ph:"https://…"}]],"Add a link",30);
     if(b.type==="video") h+=txt(b,"url","Video",{max:1000,ph:"YouTube link, or a video file’s link",hint:S.me.files?'<button type="button" class="linkbtn" data-pickvideo="url">Choose a video from Files</button>':""})+(b.url&&!/youtu/.test(b.url)?imageField("poster",null,"Still shown before it plays",b):"")+txt(b,"caption","Caption",{max:200});
+    if(b.type==="timeline") h+=txt(b,"heading","Heading",{max:120,ph:"e.g. Experience"})+'<span class="label">Entries</span>'+rows(b,"items",[["title","Role or title",{max:120}],["org","Where (company, school)",{max:120}],["when","When",{max:60,ph:"e.g. 2022 – now"}],["where","Place",{max:80,ph:"e.g. Alicante"}],["md","What happened",{area:true,rows:3,max:3000,code:true,hint:"- for a list, **bold**, [words](link)."}]],"Add an entry",30);
     if(b.type==="divider") h+=seg(b,"style","Kind",[["rule","A line"],["space","Just space"]]);
     if(sectioned) h+=seg(b,"align","Line up",[["left","Left"],["center","Centre"]]);
     if(b.type!=="divider") h+='<div class="fieldrow">'+seg(b,"bg","Background",[["page","Page"],["soft","Soft"],["accent","Accent"]])+seg(b,"space","Spacing",[["tight","Tight"],["normal","Normal"],["airy","Airy"]])+'</div>';
@@ -966,6 +970,44 @@ function redirectsEditor(host, site){
     .catch(function(e){ if(window.console) console.error(e); host.innerHTML='<h2 class="sec">Redirects</h2><div class="nsec"><p class="hint" style="margin:0">Couldn’t load redirects: '+esc(e.message)+'</p></div>' });
 }
 
+/* ============ password (Site settings) ============ */
+function lockEditor(host, site){
+  var st={locked:false, hint:"", updated_at:null}, changing=false;
+  function draw(){
+    var form='<div class="field"><label for="lkPw">'+(st.locked?"New password":"Password")+'</label><div class="affix lkpw"><input type="password" id="lkPw" maxlength="200" autocomplete="new-password" placeholder="At least 8 characters"><button type="button" class="btn sm ghost" id="lkShow" aria-pressed="false">Show</button></div></div>'+
+      '<div class="actions"><button type="button" class="btn sm" id="lkSet">'+(st.locked?"Change password":"Lock the site")+'</button>'+(st.locked?'<button type="button" class="btn sm ghost" id="lkCancel">Cancel</button>':'')+'</div>';
+    host.innerHTML='<h2 class="sec">Password</h2><div class="stack nsec">'+
+      (st.locked
+        ? '<p class="hint" style="margin:0"><b>Locked.</b> Visitors need the password to see any page. Search engines are kept out'+(st.updated_at?'. Set '+esc(new Date(st.updated_at).toLocaleDateString("en-IE",{day:"numeric",month:"short",year:"numeric"})):"")+'.</p>'+
+          '<div class="field"><label for="lkHint">Line on the password page</label><input type="text" id="lkHint" maxlength="200" value="'+esc(st.hint)+'" placeholder="This page is private. Enter the password you were given to open it."><span class="hint">Saved as you type.</span></div>'+
+          (changing?form:'<div class="actions"><button type="button" class="btn sm" id="lkChange">Change password</button><button type="button" class="btn sm ghost danger" id="lkOff">Remove password</button></div>')
+        : '<p class="hint" style="margin:0">Anyone with the address can see this site. Add a password to keep it private: visitors enter it once and stay in for 30 days.</p>'+form)+
+      '<div id="lkMsg"></div></div>';
+    var pw=$("#lkPw",host);
+    if(pw){
+      $("#lkShow",host).onclick=function(){ var on=pw.type==="password"; pw.type=on?"text":"password"; this.textContent=on?"Hide":"Show"; this.setAttribute("aria-pressed",String(on)) };
+      $("#lkSet",host).onclick=function(){
+        var v=pw.value; if(v.length<8){ toast("Use at least 8 characters.",true); pw.focus(); return }
+        var btn=this; btn.disabled=true;
+        api("PUT","sites/"+site.id+"/lock",{password:v, hint:st.hint}).then(function(r){ st=r; changing=false; site.locked=1; draw(); refreshNav(); toast(r.locked?"Password saved. The site is locked.":"Saved") })
+          .catch(function(e){ btn.disabled=false; toast(e.message,true) });
+      };
+      pw.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); $("#lkSet",host).click() } };
+    }
+    if($("#lkCancel",host)) $("#lkCancel",host).onclick=function(){ changing=false; draw() };
+    if($("#lkChange",host)) $("#lkChange",host).onclick=function(){ changing=true; draw(); $("#lkPw",host).focus() };
+    if($("#lkOff",host)) $("#lkOff",host).onclick=function(){
+      $("#lkMsg",host).innerHTML='<div class="confirm"><span>Remove the password? Anyone with the address will see the site.</span><button class="btn sm danger" type="button" id="lkOffYes">Remove</button><button class="btn sm ghost" type="button" id="lkOffNo">Keep it</button></div>';
+      $("#lkOffNo",host).onclick=function(){ $("#lkMsg",host).innerHTML="" };
+      $("#lkOffYes",host).onclick=function(){ api("DELETE","sites/"+site.id+"/lock").then(function(r){ st=r; site.locked=0; draw(); refreshNav(); toast("Password removed") }).catch(function(e){ toast(e.message,true) }) };
+    };
+    var hint=$("#lkHint",host), t;
+    if(hint) hint.oninput=function(){ st.hint=hint.value; clearTimeout(t); t=setTimeout(function(){ api("PUT","sites/"+site.id+"/lock",{hint:st.hint}).catch(function(e){ toast(e.message,true) }) },500) };
+  }
+  api("GET","sites/"+site.id+"/lock").then(function(r){ st=r; draw() })
+    .catch(function(e){ host.innerHTML='<h2 class="sec">Password</h2><div class="nsec"><p class="hint" style="margin:0">Couldn’t load the password setting: '+esc(e.message)+'</p></div>' });
+}
+
 function siteSettings(site){
   var b=$("#tabBody");
   b.innerHTML='<div class="editor"><form class="form panel" id="ssForm" autocomplete="off"><h2 class="sec">Site settings <span class="saving" id="ssSave">Saved</span></h2>'+
@@ -975,7 +1017,7 @@ function siteSettings(site){
     '<div class="field"><label for="ssBrand">Brand</label><select id="ssBrand"><option value="">None: Studio’s house style</option></select><span class="hint">The site’s fonts, colours, logo and shapes come from its brand. <a href="#/brands">Edit brands</a></span></div>'+
     '<div class="field" id="ssColour"><span class="label">Colour</span>'+swatches(site.accent,"acc")+'<span class="hint" id="ssColourHint" hidden>The brand’s accent colour is used instead while a brand is set.</span></div>'+
     '<div class="field"><span class="label">Theme</span><div class="seg" role="group" aria-label="Theme" style="align-self:flex-start">'+[["auto","Follow visitor"],["light","Light"],["dark","Dark"]].map(function(t){ return '<button type="button" data-th="'+t[0]+'" aria-pressed="'+(site.theme===t[0])+'">'+t[1]+'</button>' }).join("")+'</div></div>'+
-    '<div id="navHost"></div><div id="domHost"></div><div id="redHost"></div>'+
+    '<div id="lockHost"></div><div id="navHost"></div><div id="domHost"></div><div id="redHost"></div>'+
     '<h2 class="sec">Delete site</h2><p class="hint">Removes the site and all its pages. Contacts and emails stay.</p><div class="actions"><button type="button" class="btn sm danger" id="delSite">Delete '+esc(site.name)+'</button></div><div id="delConfirm"></div>'+
     '</form><div class="proof"><div class="proofbar"><span class="url">home page</span></div><iframe id="pv" title="Site preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
   var save=saver($("#ssSave"), function(d){ return api("PATCH","sites/"+site.id,d).then(function(r){ refreshNav(); Object.assign(site, r.site); var sub=$("#ssSub"); if(document.activeElement!==sub) sub.value=r.site.subdomain; $("#view").style.setProperty("--pc","var(--"+r.site.accent+")"); preview() }) });
@@ -987,6 +1029,7 @@ function siteSettings(site){
   }
   var navModel=null, pvT;
   navModel=navEditor($("#navHost"), site, function(n){ save({nav:JSON.parse(JSON.stringify(n))}); clearTimeout(pvT); pvT=setTimeout(preview,400) });
+  lockEditor($("#lockHost"), site);
   domainsEditor($("#domHost"), site);
   redirectsEditor($("#redHost"), site);
   api("GET","brands").then(function(r){

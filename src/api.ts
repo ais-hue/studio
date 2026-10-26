@@ -7,6 +7,7 @@ import { Campaign, enqueueCampaign, processQueue, renderEmail, sendStepTest, sen
 import { CONDITIONS, Sequence, Step, enroll, enrollList, exitAll } from "./automation";
 import { connectResendWebhook, webhookStatus } from "./hooks";
 import { VERSION } from "./version";
+import { getLock, removeLock, setHint, setLock } from "./gate";
 import { linkStats } from "./links";
 import { FIELD_TYPES, loadForm } from "./forms";
 import { cleanRules, compileRules, segmentWhere } from "./segments";
@@ -149,7 +150,8 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         (SELECT COUNT(*) FROM pages p WHERE p.site_id = s.id) AS pages,
         (SELECT COUNT(*) FROM pages p WHERE p.site_id = s.id AND p.published = 1) AS pages_live,
         (SELECT COALESCE(SUM(views),0) FROM pages p WHERE p.site_id = s.id) AS views,
-        (SELECT COUNT(*) FROM list_members m JOIN lists l ON l.id = m.list_id WHERE l.site_id = s.id) AS signups
+        (SELECT COUNT(*) FROM list_members m JOIN lists l ON l.id = m.list_id WHERE l.site_id = s.id) AS signups,
+        EXISTS (SELECT 1 FROM site_locks k WHERE k.site_id = s.id) AS locked
         FROM sites s ORDER BY s.created_at`).all();
       return json({ sites: results });
     }
@@ -177,6 +179,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
         env.DB.prepare("DELETE FROM pages WHERE site_id = ?").bind(b),
         env.DB.prepare("DELETE FROM domains WHERE site_id = ?").bind(b),
         env.DB.prepare("DELETE FROM redirects WHERE site_id = ?").bind(b),
+        env.DB.prepare("DELETE FROM site_locks WHERE site_id = ?").bind(b),
         env.DB.prepare("DELETE FROM sites WHERE id = ?").bind(b),
       ]);
       return json({ ok: true });
@@ -188,6 +191,18 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b && c === "domains" && m === "GET") { await getSite(env, b); return json({ domains: await siteDomains(env, b) }); }
     if (b && c === "domains" && m === "POST") { await getSite(env, b); return json({ domains: await addDomain(env, b, (await body(req)).hostname) }, 201); }
     if (b && c === "redirects" && m === "GET") { await getSite(env, b); return json({ redirects: await getRedirects(env, b) }); }
+    // The site's password. Only whether it's set (and its hint) ever comes back; the password itself isn't stored.
+    if (b && c === "lock" && m === "GET") { await getSite(env, b); const l = await getLock(env, b); return json({ locked: !!l, hint: l?.hint || "", updated_at: l?.updated_at || null }); }
+    if (b && c === "lock" && m === "PUT") {
+      await getSite(env, b);
+      const d = await body(req);
+      if (d.password !== undefined) await setLock(env, b, String(d.password), str(d.hint, 200));
+      else if (await getLock(env, b)) await setHint(env, b, str(d.hint, 200));
+      else throw new HttpError(400, "Choose a password first.");
+      const l = await getLock(env, b);
+      return json({ locked: !!l, hint: l?.hint || "", updated_at: l?.updated_at || null });
+    }
+    if (b && c === "lock" && m === "DELETE") { await getSite(env, b); await removeLock(env, b); return json({ locked: false, hint: "", updated_at: null }); }
     if (b && c === "redirects" && m === "PUT") { await getSite(env, b); return json({ redirects: await setRedirects(env, b, (await body(req)).redirects) }); }
   }
 

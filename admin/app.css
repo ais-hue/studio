@@ -651,3 +651,7 @@ a.t:hover{text-decoration:underline}
 .seg.wrap{flex-wrap:wrap;align-self:flex-start}
 .seg.wrap button{border-left:0;border-right:1px solid var(--line2)}
 .seg.wrap button:last-child{border-right:0}
+
+/* password (Site settings) and locked sites in the sidebar */
+.lkpw .btn{border:0;border-left:1px solid var(--line);border-radius:0;flex:none}
+.site .lk{margin-left:auto;flex:none;opacity:.7}

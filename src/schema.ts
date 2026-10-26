@@ -61,6 +61,8 @@ export const SCHEMA: string[] = [
  "CREATE TABLE IF NOT EXISTS redirects ( site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE, from_path TEXT NOT NULL, to_url TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL, PRIMARY KEY (site_id, from_path) )",
  "CREATE TABLE IF NOT EXISTS brands ( id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL DEFAULT 'main', parent_id TEXT REFERENCES brands(id) ON DELETE SET NULL, name TEXT NOT NULL, kit TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
  "CREATE INDEX IF NOT EXISTS brands_parent ON brands(parent_id)",
+ "CREATE TABLE IF NOT EXISTS site_locks ( site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE, hash TEXT NOT NULL, salt TEXT NOT NULL, iter INTEGER NOT NULL, hint TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL )",
+ "CREATE TABLE IF NOT EXISTS gate_tries ( k TEXT PRIMARY KEY, n INTEGER NOT NULL, since INTEGER NOT NULL )",
 ];
 export const ALTERS: string[] = [
  "ALTER TABLE sends ADD COLUMN step_id TEXT",

@@ -176,6 +176,23 @@ export function renderBlog(site: Site, posts: Page[], o: RenderOpts): string {
 ${items ? `<ul class="index">${items}</ul>` : `<p class="sub">Nothing published yet.</p>`}`, o, "", "blog");
 }
 
+/** The page a password-protected site shows until the visitor enters its password (src/gate.ts). */
+export function renderGate(site: Site, o: RenderOpts, hint: string, error: string, next: string): string {
+  const body = `<section class="gate">
+<div class="gate-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg></div>
+<div class="eyebrow">Private</div>
+<h1>${esc(site.name)}</h1>
+<p class="sub">${esc(hint || "This page is private. Enter the password you were given to open it.")}</p>
+<form class="gate-form" method="post" action="/__proof/unlock">
+  <input type="hidden" name="next" value="${esc(next)}">
+  <label class="sr" for="gate-pw">Password</label>
+  <div class="row"><input id="gate-pw" type="password" name="password" placeholder="Password" required autocomplete="current-password" autofocus${error ? ` aria-invalid="true" aria-describedby="gate-msg"` : ""}><button type="submit">Open</button></div>
+  <p class="gate-msg" id="gate-msg" role="alert">${esc(error)}</p>
+</form>
+</section>`;
+  return shell(site, `${site.name} · Private`, "", body, { ...o, hasBlog: false, canonical: undefined, preview: true }, "gate-page");
+}
+
 export function renderNotice(site: Site | null, heading: string, text: string, o: RenderOpts, status = ""): string {
   const s: Site = site || { id: "", name: o.host.split(".")[0] || "Proof", subdomain: "", accent: "brass", theme: "auto", status: "", tagline: "" };
   return shell(s, heading, "", `${status ? `<div class="eyebrow">${esc(status)}</div>` : ""}<h1>${esc(heading)}</h1><div class="notice">${text}</div>`, { ...o, hasBlog: false });
