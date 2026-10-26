@@ -20,6 +20,8 @@ A brand holds a site's look: fonts, colours, logo, shapes, background and the st
 
 Site settings → Password locks a site. Studio keeps only a salted PBKDF2 hash (`site_locks`, `src/gate.ts`); the password itself is never stored or sent back. Until a visitor enters it, every address on the site (its `*.<ROOT_DOMAIN>` address and its own domains) shows a password page in the site's brand. The right password sets a signed, HttpOnly cookie for 30 days; changing or removing the password signs everyone out. Locked sites send `cache-control: private, no-store` and `x-robots-tag: noindex`, `robots.txt` disallows everything and the sitemap is empty. Ten wrong tries from one visitor lock them out for 15 minutes (`gate_tries`). Sign-ups on a locked site only work after the password.
 
+**Custom pages** (template `html`) are a whole HTML document written by hand or by Claude and served exactly as written, for one-off designs the blocks can't do. They load Google fonts through `/__proof/gf.css?f=Font+Name|Other` like brands do, and a site password still applies. `POST /api/pages/<id>/custom` turns an existing page into one and keeps the old version for `/unconvert`.
+
 The **Timeline** block (roles, dates, place and a short write-up for each entry) suits CVs and company histories.
 
 ## Site header, footer and domains

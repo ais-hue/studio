@@ -15,12 +15,13 @@ var TEMPLATES = {
   waitlist:{name:"Waitlist", blurb:"Big headline, one line, signup."},
   launch:{name:"Launch page", blurb:"Headline, selling points, signup."},
   links:{name:"Link hub", blurb:"Link-in-bio list plus signup."},
-  post:{name:"Journal post", blurb:"Written post, listed under Journal."}
+  post:{name:"Journal post", blurb:"Written post, listed under Journal."},
+  html:{name:"Custom page", blurb:"Your own HTML, designed from scratch. Ask Claude to build one."}
 };
 function tplName(t){ return (TEMPLATES[t]||{name:t}).name }
 
 var S = { me:null, cleanup:[] };
-var VERSION = "202610261500";
+var VERSION = "202610261730";
 
 function api(method, path, body){
   var opt = { method: method, headers: {} };
@@ -760,6 +761,33 @@ function importPage(site, url, name, copyImages, onStep){
   });
 }
 
+/* ============ custom page: the page's own HTML, with a live preview ============ */
+function customEditor(host, site, p){
+  var c={}; try{ c=JSON.parse(p.content||"{}") }catch(e){}
+  host.innerHTML='<div class="editor"><form class="form panel" id="cuForm" autocomplete="off">'+
+    '<h2 class="sec">Edit custom page <span class="saving" id="cuSave">Saved</span></h2>'+
+    '<div class="field"><label for="cuTitle">Page name</label><input type="text" id="cuTitle" maxlength="80" value="'+esc(p.title)+'"></div>'+
+    (p.slug!==""?'<div class="field"><label for="cuSlug">Address</label><div class="affix"><span>/</span><input type="text" id="cuSlug" maxlength="60" value="'+esc(p.slug)+'"></div></div>':'<p class="hint">This is the home page at '+esc(hostOf(site))+'.</p>')+
+    '<div class="field"><label for="cuHtml">HTML</label><textarea id="cuHtml" class="code" rows="24" spellcheck="false" style="font-family:var(--mono,ui-monospace,monospace);font-size:12.5px;line-height:1.5;white-space:pre;tab-size:2">'+esc(c.html||"")+'</textarea>'+
+      '<span class="hint">A whole page, served exactly as written. Load Google fonts from <code>/__proof/gf.css?f=Font+Name|Other+Font</code> so visitors never contact Google, and put pictures in Files. A site password still applies.</span></div>'+
+    (p.slug!==""?'<div class="actions"><button type="button" class="btn sm danger" id="cuDel">Delete page</button></div><div id="cuDelC"></div>':'')+
+    '</form><div class="proof"><div class="proofbar"><span class="url">https://'+esc(hostOf(site))+'/'+esc(p.slug)+'</span></div><iframe id="pv" title="Page preview" sandbox="allow-scripts allow-same-origin"></iframe></div></div>';
+  var save=saver($("#cuSave"), function(d){ return api("PATCH","pages/"+p.id,d).then(function(r){ p.title=r.page.title; p.slug=r.page.slug; p.content=r.page.content }) });
+  var t; function preview(){ clearTimeout(t); t=setTimeout(function(){ var f=$("#pv"); if(f) f.srcdoc=$("#cuHtml").value },300) }
+  S.cleanup.push(function(){ clearTimeout(t) });
+  $("#cuTitle").oninput=function(){ save({title:this.value}) };
+  if($("#cuSlug")) $("#cuSlug").oninput=function(){ save({slug:this.value}) };
+  $("#cuHtml").oninput=function(){ save({content:{html:this.value}}); preview() };
+  $("#cuHtml").onkeydown=function(e){ if(e.key==="Tab"&&!e.shiftKey&&!e.metaKey&&!e.ctrlKey){ e.preventDefault(); var a=this.selectionStart; this.setRangeText("  ",a,this.selectionEnd,"end"); this.dispatchEvent(new Event("input")) } };
+  $("#cuForm").onsubmit=function(e){ e.preventDefault(); save.now() };
+  if($("#cuDel")) $("#cuDel").onclick=function(){
+    $("#cuDelC").innerHTML='<div class="confirm"><span>Delete “'+esc(p.title)+'”?</span><button class="btn sm danger" type="button" id="cuYes">Delete</button><button class="btn sm ghost" type="button" id="cuNo">Keep it</button></div>';
+    $("#cuNo").onclick=function(){ $("#cuDelC").innerHTML="" };
+    $("#cuYes").onclick=function(){ api("DELETE","pages/"+p.id).then(function(){ toast("Page deleted"); go("#/sites/"+site.id+"/pages") }).catch(function(e){ toast(e.message,true) }) };
+  };
+  preview();
+}
+
 function sitePages(site, pages, pageId){
   var body=$("#tabBody"), newTpl="blocks";
   var sel = pages.filter(function(p){return p.id===pageId})[0] || pages[0];
@@ -817,6 +845,7 @@ function sitePages(site, pages, pageId){
   function editor(){
     var host=$("#editorHost"), p=sel, c={};
     if(p.template==="blocks"){ blockEditor(host, site, p, function(np){ Object.assign(p, np); render(false) }); return }
+    if(p.template==="html"){ customEditor(host, site, p); return }
     try{ c=JSON.parse(p.content||"{}") }catch(e){}
     var previewTheme = store("proof.pvtheme")||"site";
     host.innerHTML='<div class="editor"><form class="form panel" id="edForm" autocomplete="off">'+

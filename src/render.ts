@@ -119,7 +119,16 @@ function safeUrl(u: string): string {
   return /^(https?:\/\/|mailto:|\/)/i.test(u) ? u : "";
 }
 
+/** A custom page's own HTML, as a whole document. Studio adds nothing but a noindex tag in previews. */
+function renderCustom(site: Site, page: Page, o: RenderOpts): string {
+  const h = String((parseContent(page) as { html?: string }).html || "");
+  if (!h.trim()) return renderNotice(site, page.title, "This page is empty. Add its HTML in Studio.", o);
+  const doc = /<html[\s>]/i.test(h) ? h : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(page.title)} · ${esc(site.name)}</title></head><body>${h}</body></html>`;
+  return o.preview ? doc.replace(/<head([^>]*)>/i, `<head$1><meta name="robots" content="noindex">`) : doc;
+}
+
 export function renderPage(site: Site, page: Page, o: RenderOpts): string {
+  if (page.template === "html") return renderCustom(site, page, o);
   if (page.template === "blocks") return renderBlockPage(site, page, parseBlocks(page), o);
   const c = parseContent(page);
   const headline = c.headline || page.title;

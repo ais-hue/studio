@@ -38,6 +38,36 @@ export function defaultContent(template: string, siteName: string, host: string)
   }
 }
 
+/* Custom pages: a whole HTML document written by hand (or by Claude), served as it is. Only Studio's admin can save one. */
+const CUSTOM_MAX = 400_000;
+function customContent(html: unknown): { html: string } {
+  const h = String(html ?? "");
+  if (h.length > CUSTOM_MAX) throw new HttpError(400, "This page’s HTML is too big. Keep it under 400 KB and put pictures in Files.");
+  return { html: h };
+}
+const STARTER_HTML = (title: string) => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title.replace(/[<&]/g, "")}</title>
+<!-- Google fonts are served from this site's own address, so visitors never contact Google: -->
+<link rel="stylesheet" href="/__proof/gf.css?f=Newsreader|Inter">
+<style>
+  body{margin:0;font-family:Inter,system-ui,sans-serif;line-height:1.6;color:#1d1c1a;background:#f7f4ee}
+  main{max-width:720px;margin:0 auto;padding:64px 24px}
+  h1{font-family:Newsreader,Georgia,serif;font-weight:500;font-size:clamp(40px,7vw,72px);line-height:1;margin:0 0 16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>${title.replace(/[<&]/g, "")}</h1>
+  <p>Write this page's HTML in Studio.</p>
+</main>
+</body>
+</html>
+`;
+
 async function uniqueSubdomain(env: Env, want: string, exceptId?: string): Promise<string> {
   let base = slugify(want, 30) || "site";
   if (RESERVED_SUBDOMAINS.has(base)) base = base + "-site";
@@ -278,7 +308,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (!b && m === "POST") {
       const d = await body(req);
       const site = await getSite(env, str(d.site_id));
-      const template = d.template === "blocks" ? "blocks" : TEMPLATES.includes(d.template) ? d.template : "waitlist";
+      const template = d.template === "blocks" || d.template === "html" ? d.template : TEMPLATES.includes(d.template) ? d.template : "waitlist";
       const title = str(d.title, 80) || "Untitled";
       const slug = await uniqueSlug(env, site.id, d.slug || title);
       // A block page starts from one of the old templates' layouts (d.starter), or from whatever blocks were sent.
@@ -286,6 +316,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       let content: any = defaultContent(template === "blocks" ? starter : template, site.name, `${site.subdomain}.${env.ROOT_DOMAIN}`);
       if (template === "post") content.headline = title;
       if (template === "blocks") content = d.content?.blocks ? cleanBlocks(d.content) : fromTemplate(starter, { ...content, headline: title }, title);
+      if (template === "html") content = customContent(d.content?.html ?? STARTER_HTML(title));
       const pid = id("pg_");
       if (template === "blocks") content = await trackStoreLinks(env, { id: pid, slug }, site, content);
       await env.DB.prepare("INSERT INTO pages (id, site_id, slug, title, template, content, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)")
@@ -299,6 +330,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
       let slug = p.slug;
       if (d.slug !== undefined && p.slug !== "") slug = await uniqueSlug(env, p.site_id, d.slug || title, p.id);
       let content = d.content !== undefined ? JSON.stringify(d.content).slice(0, 100_000) : p.content;
+      if (p.template === "html" && d.content !== undefined) content = JSON.stringify(customContent(d.content?.html));
       if (p.template === "blocks" && d.content !== undefined) {
         const clean = cleanBlocks(d.content);
         content = JSON.stringify(await trackStoreLinks(env, { id: p.id, slug }, await getSite(env, p.site_id), clean));
@@ -313,10 +345,20 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     if (b && c === "convert" && m === "POST") {
       const p = await getPage(env, b);
       if (p.template === "blocks") return json({ page: p });
+      if (p.template === "html") throw new HttpError(400, "Custom pages are your own HTML, so they can’t be turned into blocks.");
       if (p.template === "post") throw new HttpError(400, "Journal posts stay as they are for now. They become a collection later.");
       const content = await trackStoreLinks(env, p, await getSite(env, p.site_id), fromTemplate(p.template, parseContent(p) as any, p.title));
       await env.DB.prepare("UPDATE pages SET template = 'blocks', content = ?, previous = ?, updated_at = ? WHERE id = ?")
         .bind(JSON.stringify(content), JSON.stringify({ template: p.template, content: p.content }), t, p.id).run();
+      return json({ page: await getPage(env, p.id) });
+    }
+    /* Turn a page into a custom page. The old version is kept, so /unconvert brings it back. */
+    if (b && c === "custom" && m === "POST") {
+      const p = await getPage(env, b);
+      const d = await body(req).catch(() => ({} as any));
+      if (p.template === "html") return json({ page: p });
+      await env.DB.prepare("UPDATE pages SET template = 'html', content = ?, previous = ?, updated_at = ? WHERE id = ?")
+        .bind(JSON.stringify(customContent(d?.html ?? STARTER_HTML(p.title))), JSON.stringify({ template: p.template, content: p.content }), t, p.id).run();
       return json({ page: await getPage(env, p.id) });
     }
     if (b && c === "unconvert" && m === "POST") {
