@@ -125,7 +125,7 @@ function postView(env: Env, p: SocialPost) {
 const TOOLS: Tool[] = [
   {
     name: "list_brands", title: "List brands", readOnly: true,
-    description: "List Aisling's social brands in Studio (like Ciúnas), which platforms each has connected, their posting times, and the next free posting slot. Call this first so drafts go to the right brand and platforms.",
+    description: "List Aisling's social brands in Aisling Studio (like Ciúnas), which platforms each has connected, their posting times, and the next free posting slot. Call this first so drafts go to the right brand and platforms.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     run: async (env) => {
       const tz = (await getSettings(env)).timezone;
@@ -140,7 +140,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "create_social_draft", title: "Draft a social post",
-    description: "Save a social post as a DRAFT in Studio for Aisling to review. It is never posted or scheduled by this tool. Give one main caption, and optionally a different caption for particular platforms (e.g. a shorter one for Bluesky/X, hashtags for Instagram). Attach media with file_ids from list_files/upload_file, or image_urls (https) which are copied into Studio's files first. Instagram, TikTok and Pinterest need at least one image or video. Links in captions are tracked automatically when posted.",
+    description: "Save a social post as a DRAFT in Aisling Studio for Aisling to review. It is never posted or scheduled by this tool. Give one main caption, and optionally a different caption for particular platforms (e.g. a shorter one for Bluesky/X, hashtags for Instagram). Attach media with file_ids from list_files/upload_file, or image_urls (https) which are copied into Aisling Studio's files first. Instagram, TikTok and Pinterest need at least one image or video. Links in captions are tracked automatically when posted.",
     inputSchema: {
       type: "object", required: ["brand", "caption"], additionalProperties: false,
       properties: {
@@ -148,8 +148,8 @@ const TOOLS: Tool[] = [
         caption: { type: "string", description: "Main caption used on every platform without its own version." },
         platforms: { type: "array", items: { type: "string" }, description: "Platform keys to post to (instagram, tiktok, linkedin, threads, bluesky, twitter, pinterest, facebook). Defaults to every connected platform." },
         platform_captions: { type: "object", additionalProperties: { type: "string" }, description: "Optional per-platform caption, keyed by platform key." },
-        file_ids: { type: "array", items: { type: "string" }, description: "Studio file ids to attach, in order." },
-        image_urls: { type: "array", items: { type: "string" }, description: "https links to images to copy into Studio and attach." },
+        file_ids: { type: "array", items: { type: "string" }, description: "Aisling Studio file ids to attach, in order." },
+        image_urls: { type: "array", items: { type: "string" }, description: "https links to images to copy into Aisling Studio and attach." },
         pinterest_title: { type: "string" }, pinterest_link: { type: "string", description: "Where the pin should link to." },
         track_links: { type: "boolean", description: "Turn links into tracked links when posted. Default true." },
         planned_for: { type: "string", description: "ISO date-time this post is meant to go out, ideally one of free_slots_next_days from get_brand_brief. Aisling sees it on the Review page; nothing is scheduled until she approves." },
@@ -190,7 +190,7 @@ const TOOLS: Tool[] = [
       if (camp) await setInitiative(env, "post", pid, camp.id);
       const p = (await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(pid).first<SocialPost>())!;
       return { saved_as: "draft", brand: b.name, campaign: camp?.name || null, ...postView(env, p), open_in_studio: await studioUrl(env, batch ? "review" : "social/p/" + pid),
-        note: "Aisling reviews and posts or schedules it from Studio." + (problems(p).length ? " Some things are still needed before it can go out (see still_needed)." : "") };
+        note: "Aisling reviews and posts or schedules it from Aisling Studio." + (problems(p).length ? " Some things are still needed before it can go out (see still_needed)." : "") };
     },
   },
   {
@@ -211,7 +211,7 @@ const TOOLS: Tool[] = [
     run: async (env, a) => {
       const p = await env.DB.prepare("SELECT * FROM social_posts WHERE id = ?").bind(s(a.post_id, 80)).first<SocialPost & { planned_at: number | null; note: string | null }>();
       if (!p) throw new HttpError(404, "No post with that id.");
-      if (p.status !== "draft") throw new HttpError(409, `That post is ${p.status}, not a draft. Aisling can pull it back to a draft in Studio.`);
+      if (p.status !== "draft") throw new HttpError(409, `That post is ${p.status}, not a draft. Aisling can pull it back to a draft in Aisling Studio.`);
       const opts = JSON.parse(p.options || "{}");
       let targets = p.targets, media = p.media;
       if (Array.isArray(a.platforms)) {
@@ -280,7 +280,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "finish_draft_batch", title: "Finish a batch of drafts",
-    description: "Mark a batch as ready. Studio emails Aisling that the drafts are waiting on her Review page, where she approves, edits or bins each one. Nothing is posted or scheduled by this.",
+    description: "Mark a batch as ready. Aisling Studio emails Aisling that the drafts are waiting on her Review page, where she approves, edits or bins each one. Nothing is posted or scheduled by this.",
     inputSchema: { type: "object", required: ["batch_id"], additionalProperties: false, properties: {
       batch_id: { type: "string" }, summary: { type: "string", description: "Two or three lines: what this batch covers and anything she needs to decide." } } },
     run: async (env, a) => {
@@ -303,8 +303,8 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "upload_file", title: "Save a file to Studio",
-    description: "Save an image, video, PDF or audio file into Studio's file library so it can be used in posts, emails and pages. Give either base64 data (small files you made, up to about 20 MB) or an https source_url to copy from (up to 500 MB; Google Drive and Dropbox share links work if they're set to anyone-with-the-link). For videos and other big files on Aisling's computer or in this chat, use create_upload_link instead. Returns a file id and public link.",
+    name: "upload_file", title: "Save a file to Aisling Studio",
+    description: "Save an image, video, PDF or audio file into Aisling Studio's file library so it can be used in posts, emails and pages. Give either base64 data (small files you made, up to about 20 MB) or an https source_url to copy from (up to 500 MB; Google Drive and Dropbox share links work if they're set to anyone-with-the-link). For videos and other big files on Aisling's computer or in this chat, use create_upload_link instead. Returns a file id and public link.",
     inputSchema: { type: "object", required: ["name"], additionalProperties: false, properties: {
       name: { type: "string", description: "File name with extension, e.g. autumn-candles.png" },
       base64: { type: "string", description: "File contents, base64-encoded (a data: URL is fine)." },
@@ -320,7 +320,7 @@ const TOOLS: Tool[] = [
       else {
         if (!a.base64) throw new HttpError(400, "Give base64 or source_url.");
         const bytes = b64bytes(String(a.base64));
-        if (bytes.byteLength > 25 * 1024 * 1024) throw new HttpError(413, "That’s over 25 MB. Use source_url, or upload it in Studio.");
+        if (bytes.byteLength > 25 * 1024 * 1024) throw new HttpError(413, "That’s over 25 MB. Use source_url, or upload it in Aisling Studio.");
         const ext = (name.split(".").pop() || "").toLowerCase();
         const type = s(a.content_type, 80) || TYPE_BY_EXT[ext] || "";
         f = await storeBytes(env, bytes, { name, type, folder: s(a.folder, 60), alt: s(a.alt, 300) });
@@ -330,7 +330,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "create_upload_link", title: "Make an upload link",
-    description: "Make a one-time link for getting big files, like marketing videos, into Studio's file library. Two ways to use it: (1) give the link to Aisling to open in her browser and drag the files in (works for anything, up to 4 GB each); or (2) if you can run shell commands and have the file, upload it yourself: `curl -T video.mp4 -H 'content-type: video/mp4' <url>` for files up to 90 MB, or the parts steps returned for bigger ones. Then call check_upload_link to get the file ids to attach to a draft. Links expire (default 60 minutes).",
+    description: "Make a one-time link for getting big files, like marketing videos, into Aisling Studio's file library. Two ways to use it: (1) give the link to Aisling to open in her browser and drag the files in (works for anything, up to 4 GB each); or (2) if you can run shell commands and have the file, upload it yourself: `curl -T video.mp4 -H 'content-type: video/mp4' <url>` for files up to 90 MB, or the parts steps returned for bigger ones. Then call check_upload_link to get the file ids to attach to a draft. Links expire (default 60 minutes).",
     inputSchema: { type: "object", additionalProperties: false, properties: {
       folder: { type: "string", description: "Folder to put the files in, usually the brand name." },
       note: { type: "string", description: "Short line shown on the upload page, e.g. which videos to add." },
@@ -361,7 +361,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "list_files", title: "List files", readOnly: true,
-    description: "Search Studio's file library. Returns ids and public links you can attach to drafts or put in emails as ![description](link).",
+    description: "Search Aisling Studio's file library. Returns ids and public links you can attach to drafts or put in emails as ![description](link).",
     inputSchema: { type: "object", additionalProperties: false, properties: {
       folder: { type: "string" }, query: { type: "string" }, kind: { type: "string", enum: ["image", "video", "document"] }, limit: { type: "integer", minimum: 1, maximum: 100 } } },
     run: async (env, a) => {
@@ -387,7 +387,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "create_email_draft", title: "Draft an email campaign",
-    description: "Save an email campaign as a DRAFT in Studio. It is never sent by this tool. Write the body in Markdown (## headings, **bold**, [links](https://…), - lists, ![image](https://files…)). {{name}} becomes each person's first name. Studio adds the unsubscribe link and address footer.",
+    description: "Save an email campaign as a DRAFT in Aisling Studio. It is never sent by this tool. Write the body in Markdown (## headings, **bold**, [links](https://…), - lists, ![image](https://files…)). {{name}} becomes each person's first name. Aisling Studio adds the unsubscribe link and address footer.",
     inputSchema: { type: "object", required: ["subject", "body_markdown"], additionalProperties: false, properties: {
       subject: { type: "string" }, body_markdown: { type: "string" },
       preview_line: { type: "string", description: "Grey text shown after the subject in inboxes." },
@@ -411,7 +411,7 @@ const TOOLS: Tool[] = [
       await env.DB.prepare("INSERT INTO campaigns (id, name, subject, preheader, body, list_id, site_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(cid, s(a.name, 80) || s(a.subject, 80) || "Draft from Claude", s(a.subject, 150), s(a.preview_line, 200), String(a.body_markdown || "").slice(0, 50000), listId, siteId, t, t).run();
       if (camp) await setInitiative(env, "email", cid, camp.id);
-      return { saved_as: "draft", id: cid, campaign: camp?.name || null, open_in_studio: await studioUrl(env, "emails/" + cid), note: "Aisling sends a test and sends or schedules it from Studio." };
+      return { saved_as: "draft", id: cid, campaign: camp?.name || null, open_in_studio: await studioUrl(env, "emails/" + cid), note: "Aisling sends a test and sends or schedules it from Aisling Studio." };
     },
   },
   {
@@ -511,8 +511,8 @@ async function handleOne(env: Env, msg: any): Promise<unknown | null> {
       return rpcResult(msg.id, {
         protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "studio", title: "Studio", version: VERSION },
-        instructions: "Studio is Aisling's marketing workspace. These tools read her brands, files, calendar and results, and save social posts and emails as drafts. Nothing is ever posted, scheduled or emailed from here: tell Aisling the draft is ready and give her the Studio link. Start with list_brands. To plan several posts: get_brand_brief, start_draft_batch, create_social_draft for each post (with planned_for from the free slots and a short why), then finish_draft_batch so Aisling reviews them together.",
+        serverInfo: { name: "studio", title: "Aisling Studio", version: VERSION },
+        instructions: "Aisling Studio is Aisling's marketing workspace. These tools read her brands, files, calendar and results, and save social posts and emails as drafts. Nothing is ever posted, scheduled or emailed from here: tell Aisling the draft is ready and give her the Aisling Studio link. Start with list_brands. To plan several posts: get_brand_brief, start_draft_batch, create_social_draft for each post (with planned_for from the free slots and a short why), then finish_draft_batch so Aisling reviews them together.",
       });
     }
     case "ping": return isNote ? null : rpcResult(msg.id, {});
@@ -526,7 +526,7 @@ async function handleOne(env: Env, msg: any): Promise<unknown | null> {
         const out = await tool.run(env, msg.params?.arguments || {});
         return rpcResult(msg.id, { content: [{ type: "text", text: JSON.stringify(out, null, 1) }], structuredContent: out, isError: false });
       } catch (e) {
-        const text = e instanceof HttpError ? e.message : "Studio hit a problem: " + String((e as Error)?.message || e).slice(0, 300);
+        const text = e instanceof HttpError ? e.message : "Aisling Studio hit a problem: " + String((e as Error)?.message || e).slice(0, 300);
         if (!(e instanceof HttpError)) console.error("MCP tool error", tool.name, e);
         return rpcResult(msg.id, { content: [{ type: "text", text }], isError: true });
       }
@@ -540,7 +540,7 @@ async function handleOne(env: Env, msg: any): Promise<unknown | null> {
 export async function handleMcp(req: Request, env: Env, email: string): Promise<Response> {
   const allowed = String(env.ADMIN_EMAILS || "").toLowerCase().split(/[\s,]+/).includes(email.toLowerCase());
   if (!(env.DEV_AUTH === "1" && email === "dev@localhost") && (!isEmail(email) || !allowed)) {
-    return json({ error: "This Studio account can’t be used any more." }, 403);
+    return json({ error: "This Aisling Studio account can’t be used any more." }, 403);
   }
   if (req.method === "GET" || req.method === "DELETE") return new Response(null, { status: 405, headers: { allow: "POST" } });
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });

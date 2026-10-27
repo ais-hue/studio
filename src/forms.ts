@@ -217,7 +217,7 @@ export async function handleFormPublic(req: Request, env: Env, ctx: ExecutionCon
   const f = m ? await loadForm(env, m[1]) : null;
   const isJs = !!m?.[2];
   if (!f || f.status !== "active") {
-    if (isJs) return new Response("/* This Studio form is switched off. */", { status: 404, headers: { "content-type": "text/javascript", ...CORS } });
+    if (isJs) return new Response("/* This Aisling Studio form is switched off. */", { status: 404, headers: { "content-type": "text/javascript", ...CORS } });
     return json({ error: "This form has been switched off." }, 404);
   }
   if (req.method === "GET" && isJs) return new Response(embedScript(env, f), { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=60", ...CORS } });

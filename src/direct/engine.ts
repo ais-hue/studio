@@ -148,7 +148,7 @@ export async function startConnect(env: Env, platform: string, profileId: string
   const p = PROVIDERS[platform];
   if (!p?.authorize) throw new HttpError(400, "That platform connects with an app password instead.");
   const app = await getApp(env, platform);
-  if (!app) throw new HttpError(409, `Set up Studio’s ${p.label} app in Settings first.`);
+  if (!app) throw new HttpError(409, `Set up Aisling Studio’s ${p.label} app in Settings first.`);
   const state = id("st_"), v = newVerifier();
   await env.DB.prepare("DELETE FROM social_oauth WHERE created_at < ?").bind(now() - 15 * 60_000).run();
   await env.DB.prepare("INSERT INTO social_oauth (state, platform, profile_id, verifier, created_at) VALUES (?, ?, ?, ?, ?)").bind(state, platform, profileId, v, now()).run();
@@ -244,7 +244,7 @@ export async function fresh(env: Env, acc: Account, force = false): Promise<Acco
   const p = PROVIDERS[acc.platform];
   if (!p?.refresh || (!force && !p.needsRefresh(acc, now()))) return acc;
   const app = p.kind === "oauth" ? await getApp(env, acc.platform) : ({ platform: acc.platform, client_id: "", secret: "", options: {} } as App);
-  if (!app) throw new Reconnect(`Studio’s ${p.label} app isn’t set up any more.`);
+  if (!app) throw new Reconnect(`Aisling Studio’s ${p.label} app isn’t set up any more.`);
   if (simulated(env, app) || acc.meta.simulated) return storeTokens(env, acc, { token: "sim_" + id(), expires_at: now() + 86400_000 });
   try { return await storeTokens(env, acc, await p.refresh(app, acc)); }
   catch (e) {
@@ -297,7 +297,7 @@ export async function enqueue(env: Env, p: PostRow, targets: Array<{ platform: s
   for (const tg of targets) {
     const acc = await env.DB.prepare("SELECT id, status FROM social_accounts WHERE id = ?").bind(tg.accountId).first<{ id: string; status: string }>();
     if (!acc) throw new HttpError(409, `The ${PROVIDERS[tg.platform]?.label || tg.platform} account on this post isn’t connected any more. Pick it again.`);
-    if (acc.status !== "ok") throw new HttpError(409, `${PROVIDERS[tg.platform]?.label || tg.platform} needs reconnecting before Studio can post to it.`);
+    if (acc.status !== "ok") throw new HttpError(409, `${PROVIDERS[tg.platform]?.label || tg.platform} needs reconnecting before Aisling Studio can post to it.`);
     const c = await captionFor(env, p, tg.platform, brandName);
     stmts.push(env.DB.prepare(`INSERT INTO social_deliveries (id, post_id, account_id, platform, status, step, data, next_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, 'queued', 'start', ?, ?, ?, ?)`).bind(id("dl_"), p.id, tg.accountId, tg.platform, JSON.stringify({ text: c.text, link: c.link }), at || t, t, t));
@@ -363,9 +363,9 @@ async function work(env: Env, d: DeliveryRow): Promise<void> {
     let acc = await getAccount(env, d.account_id).catch(() => { throw new Permanent("The account was disconnected."); });
     if (acc.status !== "ok") throw new Reconnect(`${PROVIDERS[acc.platform]?.label || acc.platform} needs reconnecting.`);
     const p = PROVIDERS[d.platform];
-    if (!p) throw new Permanent("Studio can’t post to that platform directly.");
+    if (!p) throw new Permanent("Aisling Studio can’t post to that platform directly.");
     const app = p.kind === "oauth" ? await getApp(env, d.platform) : ({ platform: d.platform, client_id: "", secret: "", options: {} } as App);
-    if (!app) throw new Permanent(`Studio’s ${p.label} app isn’t set up any more.`);
+    if (!app) throw new Permanent(`Aisling Studio’s ${p.label} app isn’t set up any more.`);
     acc = await fresh(env, acc);
     const options = parse<any>(post.options, {});
     if (d.platform === "pinterest") options.pinterest = { ...(options.pinterest || {}), link: data.link || "" };

@@ -62,7 +62,7 @@ const STARTER_HTML = (title: string) => `<!doctype html>
 <body>
 <main>
   <h1>${title.replace(/[<&]/g, "")}</h1>
-  <p>Write this page's HTML in Studio.</p>
+  <p>Write this page's HTML in Aisling Studio.</p>
 </main>
 </body>
 </html>
@@ -387,7 +387,7 @@ export async function handleApi(req: Request, env: Env, ctx: ExecutionContext, u
     try { u = new URL(str(d.url, 2000)); } catch { throw new HttpError(400, "That isn’t a web address. Paste the whole thing, starting https://"); }
     if (u.protocol !== "https:") throw new HttpError(400, "Only https pages can be imported.");
     const root = env.ROOT_DOMAIN.toLowerCase();
-    if (u.hostname === root || u.hostname.endsWith("." + root)) throw new HttpError(400, "That page is already in Studio.");
+    if (u.hostname === root || u.hostname.endsWith("." + root)) throw new HttpError(400, "That page is already in Aisling Studio.");
     const res = await fetch(u.toString(), { redirect: "follow", headers: { "user-agent": "Studio/1.0 page import (+https://studio." + env.ROOT_DOMAIN + ")", accept: "text/html" } });
     if (!res.ok) throw new HttpError(502, `${u.hostname} answered with an error (${res.status}). Check the address opens in a browser.`);
     const type = (res.headers.get("content-type") || "").toLowerCase();

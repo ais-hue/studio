@@ -71,7 +71,7 @@ export async function call<T = any>(label: string, url: string, init: RequestIni
   if (res.ok) return body as T;
   const msg = errMessage(body) || `${label} answered ${res.status}.`;
   if (res.status === 401) throw new Reconnect(`${label} sign-in has expired. Connect the account again. (${msg})`);
-  if (res.status === 429) throw new Retry(`${label} is rate limiting Studio: ${msg}`, 15 * 60_000);
+  if (res.status === 429) throw new Retry(`${label} is rate limiting Aisling Studio: ${msg}`, 15 * 60_000);
   if (res.status >= 500) throw new Retry(`${label} had a problem: ${msg}`, 2 * 60_000);
   throw new Permanent(`${label}: ${msg}`);
 }

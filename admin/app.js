@@ -30,7 +30,7 @@ function api(method, path, body){
     var ct = r.headers.get("content-type")||"";
     if(ct.indexOf("application/json")<0){ return r.text().then(function(t){ if(!r.ok) throw new Error("The server answered with an error ("+r.status+")."); return t }) }
     return r.json().then(function(d){ if(r.status===401){ location.href="/login"; throw new Error(d.error||"Signed out") } if(!r.ok) throw new Error(d.error || "That didn’t work."); return d });
-  }, function(){ throw new Error("Couldn’t reach Studio. Check your connection and try again.") });
+  }, function(){ throw new Error("Couldn’t reach Aisling Studio. Check your connection and try again.") });
 }
 
 var toastTimer;
@@ -83,7 +83,7 @@ function checkVersion(){
   api("GET","me").then(function(me){
     if(me.version && me.version!==VERSION && !$("#updBar")){
       var d=document.createElement("div"); d.id="updBar"; d.className="notice updbar";
-      d.innerHTML='<p><b>Studio has been updated.</b> Reload to get the latest version.</p><button class="btn sm primary" type="button">Reload</button>';
+      d.innerHTML='<p><b>Aisling Studio has been updated.</b> Reload to get the latest version.</p><button class="btn sm primary" type="button">Reload</button>';
       d.querySelector("button").onclick=function(){ location.reload() };
       document.body.appendChild(d);
     }
@@ -964,7 +964,7 @@ function domainsEditor(host, site){
           '<div class="dbot">'+chip(d)+(!d.redirect_to?'<button type="button" class="btn sm'+(d.is_primary?'':' ghost')+'" data-dmain="'+esc(d.hostname)+'"'+(canMain?'':' disabled title="Connect the domain first"')+'>'+(d.is_primary?'Main address ✓':'Make main address')+'</button>':'')+'</div></div>' }).join("")+'</div>':'')+
       '<div id="dConfirm"></div>'+
       '<div class="actions" style="flex-wrap:nowrap"><label class="sr" for="dHost">Domain</label><input type="text" id="dHost" placeholder="e.g. ciunas.app" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn sm" type="button" id="dAdd">Add domain</button></div>'+
-      '<p class="hint" style="margin:0">'+(primary?'Visitors to '+esc(hostOf(site))+' are sent to '+esc(primary.hostname)+'.':'Until a domain is the main address, the site stays at '+esc(hostOf(site))+'.')+' A domain needs to be on Cloudflare, in the same account as '+esc(S.me.root)+', with a Worker route to Studio. Ask Claude to add the route once it’s there.</p></div>';
+      '<p class="hint" style="margin:0">'+(primary?'Visitors to '+esc(hostOf(site))+' are sent to '+esc(primary.hostname)+'.':'Until a domain is the main address, the site stays at '+esc(hostOf(site))+'.')+' A domain needs to be on Cloudflare, in the same account as '+esc(S.me.root)+', with a Worker route to Aisling Studio. Ask Claude to add the route once it’s there.</p></div>';
     // A plain button and Enter key: this sits inside the settings form, and forms can't be nested.
     var add=function(){ var v=$("#dHost",host).value; if(!v.trim()) return;
       api("POST","sites/"+site.id+"/domains",{hostname:v}).then(function(r){ domains=r.domains; status={}; draw(); domains.forEach(check); toast("Domain added") }).catch(function(err){ toast(err.message,true) }) };
@@ -1242,8 +1242,8 @@ function contactsView(listParam){
           listChecks(d.lists)+
           (d.ref&&d.ref.source_type==="social" ? '<p class="hint">Brought in by a tracked link in <a href="#/social/p/'+esc(d.ref.source_id)+'">a '+esc(platName(d.ref.platform))+' post</a>.</p>' : '')+
           '<p class="hint">Came from '+esc(c.source||"—")+' on '+fmtDate(c.created_at,true)+'. '+(c.consent_at ? 'Agreed to emails on '+fmtDate(c.consent_at,true)+': “'+esc(c.consent_text)+'”' : 'Added by hand or import, no signup consent recorded.')+'</p>'+
-          (c.status==="bounced" ? '<div class="notice danger"><p>Emails to this address bounced, so Studio stopped sending to it. Only switch it back if you know the address works now.</p></div>' : '')+
-          (c.status==="complained" ? '<div class="notice danger"><p>They marked one of your emails as spam, so Studio stopped emailing them. Leave this as it is unless they ask to hear from you again.</p></div>' : '')+
+          (c.status==="bounced" ? '<div class="notice danger"><p>Emails to this address bounced, so Aisling Studio stopped sending to it. Only switch it back if you know the address works now.</p></div>' : '')+
+          (c.status==="complained" ? '<div class="notice danger"><p>They marked one of your emails as spam, so Aisling Studio stopped emailing them. Leave this as it is unless they ask to hear from you again.</p></div>' : '')+
           (c.status==="pending" ? '<div class="notice"><p>They signed up but haven’t tapped the confirmation link yet. Nothing else is sent until they do.</p></div>' : '')+
           (ctx.fields.length ? '<h2 class="sec">Details</h2><div class="fieldrow" id="cdProps">'+ctx.fields.map(function(f){ var v=c.props[f.key], iid="cp_"+f.key;
               if(f.type==="multiselect") return '<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">'+esc(f.label)+'</legend>'+f.options.map(function(o){ return '<label class="check"><input type="checkbox" data-pm="'+esc(f.key)+'" value="'+esc(o)+'"'+(Array.isArray(v)&&v.indexOf(o)>-1?" checked":"")+'> '+esc(o)+'</label>' }).join("")+'</fieldset>';
@@ -1326,7 +1326,7 @@ function formsView(){
     html+='<div class="grid2"><div class="stack">';
     html+= d.forms.length ? '<div class="tablewrap"><table><thead><tr><th>Form</th><th>Adds people to</th><th>Status</th><th class="r">Last 30 days</th><th class="r">All time</th></tr></thead><tbody>'+
         d.forms.map(function(f){ return '<tr class="click" data-go="'+esc(f.id)+'" tabindex="0"><td>'+esc(f.name)+'<span class="sub">'+(f.fields.length+1)+' field'+(f.fields.length?'s':'')+(f.site_name?' · styled as '+esc(f.site_name):'')+'</span></td><td>'+esc(f.list_name||"A new list")+'</td><td><span class="chip '+(f.status==="active"?"live":"off")+'">'+(f.status==="active"?"On":"Off")+'</span></td><td class="r mono">'+f.recent+'</td><td class="r mono">'+f.submissions+'</td></tr>' }).join("")+'</tbody></table></div>'
-      : '<div class="empty"><b>No forms yet</b>Your Studio pages already have a simple name + email sign-up. Make a form when you want more fields, or a sign-up on another website or in an app.</div>';
+      : '<div class="empty"><b>No forms yet</b>Your Aisling Studio pages already have a simple name + email sign-up. Make a form when you want more fields, or a sign-up on another website or in an app.</div>';
     html+='</div><section class="panel"><h2 class="sec">Contact fields <button class="btn sm" type="button" id="addField">New field</button></h2><div id="nfHost" class="pad" hidden></div>'+
       (fields.length ? '<div class="rows">'+fields.map(function(f){ return '<div class="rowi nosq"><span class="t">'+esc(f.label)+'<small>'+esc(FIELD_TYPE_NAMES[f.type]||f.type)+(f.options.length?': '+esc(f.options.join(", ")):'')+' · key '+esc(f.key)+'</small></span><span class="meta"><button class="btn sm ghost" type="button" data-delf="'+esc(f.id)+'" data-label="'+esc(f.label)+'">Delete</button></span></div>' }).join("")+'</div>'
         : '<div class="empty">No extra fields yet. Name and email are built in.</div>')+'<div id="dfHost"></div></section></div>';
@@ -1402,7 +1402,7 @@ function formView(fid, tab){
         var ifr='<iframe src="'+goBase+'/f/'+fid+'" title="Sign up" style="width:100%;border:0;min-height:320px" loading="lazy"></iframe>';
         var api1='curl -X POST '+goBase+'/f/'+fid+' \\\n  -H "content-type: application/json" \\\n  -d \'{"email":"ada@example.com","name":"Ada","consent":true'+(f.fields.filter(function(x){return x.key!=="name"}).length?',"fields":{'+f.fields.filter(function(x){return x.key!=="name"}).map(function(x){ var d=fdef(x.key)||{}; return '"'+x.key+'":'+(d.type==="multiselect"?'["'+(d.options[0]||"")+'"]':d.type==="checkbox"?"true":d.type==="number"?"1":'"'+(d.options&&d.options[0]||"…")+'"') }).join(",")+'}':'')+'}\'';
         var swift='var req = URLRequest(url: URL(string: "'+goBase+'/f/'+fid+'")!)\nreq.httpMethod = "POST"\nreq.setValue("application/json", forHTTPHeaderField: "content-type")\nreq.httpBody = try JSONSerialization.data(withJSONObject: [\n  "email": email, "name": name, "consent": true\n])\nlet (data, _) = try await URLSession.shared.data(for: req)';
-        h.innerHTML='<section class="panel"><h2 class="sec">On your Studio pages</h2><p class="pad" style="margin:0">Open a page, and under “Sign-up form” pick <b>'+esc(f.name)+'</b>.</p></section>'+
+        h.innerHTML='<section class="panel"><h2 class="sec">On your Aisling Studio pages</h2><p class="pad" style="margin:0">Open a page, and under “Sign-up form” pick <b>'+esc(f.name)+'</b>.</p></section>'+
           '<section class="panel"><h2 class="sec">On any website <button class="btn sm" type="button" data-copy="snJs">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">Paste where the form should go. It picks up the page’s font and colours.</p><textarea id="snJs" class="code snippet" readonly>'+esc(js)+'</textarea></div></section>'+
           '<section class="panel"><h2 class="sec">As an iframe <button class="btn sm" type="button" data-copy="snIf">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">For site builders that don’t allow scripts.</p><textarea id="snIf" class="code snippet" readonly>'+esc(ifr)+'</textarea></div></section>'+
           '<section class="panel"><h2 class="sec">From an app <button class="btn sm" type="button" data-copy="snApi">Copy</button></h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">Send JSON from Seek or any app. Ask people to agree to emails in the app, then send <code>"consent": true</code>. Replies with <code>{"ok": true, "message": …}</code>, or <code>{"ok": false, "error": …}</code> to show them.</p><textarea id="snApi" class="code snippet" readonly>'+esc(api1)+'</textarea>'+
@@ -1853,7 +1853,7 @@ function perfPanel(host, brand){
           return '<span role="cell" class="hc'+(c.posts?"":" none")+'" style="--a:'+a.toFixed(2)+'" title="'+(c.posts?c.avg+" avg from "+c.posts+" post"+(c.posts===1?"":"s"):"No posts yet")+'">'+(c.posts?c.avg:"")+'</span>' }).join("")+'</div>' }).join("")+'</div>';
       h+= d.best ? '<p class="suggest"><b>'+esc(d.best.dayName)+' '+esc(d.best.block.toLowerCase())+'</b> works best so far'+(d.best.lift>0?' ('+d.best.lift+'% above your average)':'')+'. <button class="btn sm" type="button" id="pfAdd" data-day="'+d.best.day+'" data-time="'+esc(d.best.slot)+'">Add '+DAYS_SHORT[d.best.day]+' '+esc(d.best.slot)+' as a posting time</button></p>'
         : '<p class="hint">No clear winner yet. Keep posting at a few different times and this fills in.</p>';
-    } else h+='<p class="hint">Once '+esc(brand.name)+' has 5 posts with numbers ('+d.measured+' so far), Studio shows which days and times work best.</p>';
+    } else h+='<p class="hint">Once '+esc(brand.name)+' has 5 posts with numbers ('+d.measured+' so far), Aisling Studio shows which days and times work best.</p>';
     h+='</div><div><h3 class="mini">Top posts <span class="hint">last '+d.days+' days</span></h3><div class="rows">'+d.top.map(function(t){ return '<a class="rowi nosq" href="#/social/p/'+esc(t.id)+'"><span class="t">'+esc(t.title)+'<small>'+fmtDate(t.at)+(t.reach?' · '+t.reach.toLocaleString()+' seen':'')+'</small></span><span class="meta num">'+t.engagement+'</span></a>' }).join("")+'</div></div></div></section>';
     host.innerHTML=h; bind();
     function bind(){
@@ -1964,7 +1964,7 @@ function filesView(folderParam){
   return api("GET","files?folder="+encodeURIComponent(folderParam==null?"*":folderParam)).then(function(d){
     var v=$("#view"), folder=folderParam==null?"*":folderParam, files=d.files, open=null;
     var sub='Pictures, video and documents for every brand. Use them in posts, emails and pages.';
-    if(!d.enabled){ v.innerHTML=head("Library","Files",sub)+'<div class="notice"><p><b>File storage isn’t switched on yet.</b> Turn on R2 in Cloudflare, then Studio sets up its storage on the next update.</p></div>'; return }
+    if(!d.enabled){ v.innerHTML=head("Library","Files",sub)+'<div class="notice"><p><b>File storage isn’t switched on yet.</b> Turn on R2 in Cloudflare, then Aisling Studio sets up its storage on the next update.</p></div>'; return }
     var pctUsed=Math.min(100, d.usage.bytes/d.usage.free*100);
     var html=head("Library","Files",sub,'<label class="btn primary" style="cursor:pointer"><input type="file" id="fUp" multiple hidden accept="image/*,video/*,application/pdf,audio/*">Upload</label>')+
       '<div class="cols"><aside class="stack" style="gap:10px"><div class="actions" style="justify-content:space-between"><span class="eyebrow">Folders</span><button class="btn sm" type="button" id="newFolder">New folder</button></div><div id="nfHost"></div><div class="listnav">'+
@@ -2148,7 +2148,7 @@ function bulkSetup(posts, brand, accounts){
       $("#bkN").onclick=function(){ more.innerHTML="" }; $("#bkY").onclick=function(){ this.disabled=true; this.textContent="Working…"; fn() } };
     if(kind==="queue") confirmIn("Put "+n+" post"+s+" into "+esc(brand.name)+"’s next free posting times, in the order shown?", "Queue "+n, function(){ runBulk("queue", ids).then(function(r){ finish(r,"queued") }).catch(function(e){ toast(e.message,true) }) });
     if(kind==="unschedule") confirmIn("Pull "+n+" post"+s+" back to drafts? They won’t go out.", "Unschedule "+n, function(){ runBulk("unschedule", ids).then(function(r){ finish(r,"pulled back") }).catch(function(e){ toast(e.message,true) }) });
-    if(kind==="delete") confirmIn("Delete "+n+" post"+s+" from Studio? Scheduled ones won’t go out. Posts already up stay on the platforms.", "Delete "+n, function(){ runBulk("delete", ids).then(function(r){ finish(r,"deleted") }).catch(function(e){ toast(e.message,true) }) }, true);
+    if(kind==="delete") confirmIn("Delete "+n+" post"+s+" from Aisling Studio? Scheduled ones won’t go out. Posts already up stay on the platforms.", "Delete "+n, function(){ runBulk("delete", ids).then(function(r){ finish(r,"deleted") }).catch(function(e){ toast(e.message,true) }) }, true);
     if(kind==="edit"){ bulkEdit(more, sel, brand, accounts||[], function(){ route() }); return }
     if(kind==="same"){
       more.innerHTML='<div class="sheet"><div class="actions"><label for="bkAt">Post all '+n+' at</label><input type="datetime-local" id="bkAt" style="width:auto"><button class="btn sm primary" type="button" id="bkGo">Schedule '+n+'</button><button class="btn sm ghost" type="button" id="bkN">Cancel</button></div></div>';
@@ -2230,7 +2230,7 @@ function bulkEdit(host, sel, brand, accounts, done){
     ((tk||inUse.tiktok)?'<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label">TikTok</legend><div class="fieldrow"><div class="field"><label for="beTkPriv">Who can see it</label><select id="beTkPriv"><option value="">Leave as it is</option></select></div></div>'+
       '<label class="check"><input type="checkbox" id="beTkOk"> By posting, I agree to TikTok’s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a> for each of these posts.</label>'+
       '<span class="hint">Only changes posts that go to TikTok. Posts marked as promoting your brand also fall under TikTok’s <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a>.</span></fieldset>':'')+
-    (accounts.some(function(a){return a.via==="studio"})?'<label class="check"><input type="checkbox" id="beStudio"> Post through Studio’s own connections instead of Zernio <span class="hint">('+esc(accounts.filter(function(a){return a.via==="studio"}).map(function(a){return platName(a.platform)}).join(", "))+')</span></label>':'')+
+    (accounts.some(function(a){return a.via==="studio"})?'<label class="check"><input type="checkbox" id="beStudio"> Post through Aisling Studio’s own connections instead of Zernio <span class="hint">('+esc(accounts.filter(function(a){return a.via==="studio"}).map(function(a){return platName(a.platform)}).join(", "))+')</span></label>':'')+
     '<div class="actions"><button class="btn sm primary" type="button" id="beGo">Preview changes</button><button class="btn sm ghost" type="button" id="beN">Cancel</button></div><div id="bePrev"></div></div>';
   $("#beN").onclick=function(){ host.innerHTML="" };
   if(pin) api("GET","social/accounts/"+pin._id+"/boards").then(function(d){ var s=$("#bePinBoard"); if(!s) return; s.innerHTML='<option value="">Leave as it is</option>'+d.boards.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>' }).join("") }).catch(function(){});
@@ -2409,7 +2409,7 @@ function socialView(brandParam){
         var html=head("Publish","Social","Write once, post to every account, now or on a schedule.",'<button class="btn" type="button" id="importBtn"'+(accounts.length?'':' disabled')+'>Import posts</button><button class="btn primary" type="button" id="newPost"'+(accounts.length?'':' disabled')+'>New post</button>')+'<div id="importHost"></div>';
         if(meta.simulated) html+='<div class="notice"><p>Local test copy: posting is simulated.</p></div>';
         html+='<nav class="tabs" role="tablist" aria-label="Brands">'+brands.map(function(b){ return '<a role="tab" href="#/social/b/'+esc(b._id)+'" aria-selected="'+(b._id===brand._id)+'">'+esc(b.name)+'</a>' }).join("")+'<button type="button" id="briefBtn">Brief for Claude</button><button type="button" id="renameBrand">Rename</button><button type="button" id="addBrand">+ Brand</button></nav><div id="brandHost"></div>';
-        html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. Set up Studio’s own platform apps in <a href="#/settings">Settings</a>.</span></h2><div class="plats">'+
+        html+='<section class="panel"><h2 class="sec">Accounts <span class="hint">One per platform. Set up Aisling Studio’s own platform apps in <a href="#/settings">Settings</a>.</span></h2><div class="plats">'+
           PLAT_ORDER.map(function(p){ var a=byPlat[p];
             return '<div class="plat'+(a?" on":"")+'"><span class="pn">'+esc(platName(p))+'</span>'+
               (a ? '<span class="pu">@'+esc(a.username)+(a.via==="zernio"?' · via Zernio':'')+(a.active?'':' · <span class="warnx" title="'+esc(a.note||"")+'">needs reconnecting</span>')+'</span>'+(a.active?'':'<button class="btn sm" type="button" data-conn="'+p+'">Reconnect</button>')+'<button class="btn sm ghost" type="button" data-disc="'+esc(a._id)+'" data-plat="'+p+'">Disconnect</button>'
@@ -2457,7 +2457,7 @@ function socialView(brandParam){
         function passwordForm(pl){
           var h=$("#discHost");
           h.innerHTML='<form class="sheet" id="pwForm" style="margin:0 18px 16px" autocomplete="off"><h3>Connect '+esc(platName(pl))+'</h3>'+
-            '<p class="hint" style="margin:0">In '+esc(platName(pl))+', open <b>Settings → Privacy and security → App passwords</b>, add one called “Studio”, and paste it here. Studio never sees your main password.</p>'+
+            '<p class="hint" style="margin:0">In '+esc(platName(pl))+', open <b>Settings → Privacy and security → App passwords</b>, add one called “Aisling Studio”, and paste it here. Aisling Studio never sees your main password.</p>'+
             '<div class="fieldrow"><div class="field"><label for="pwHandle">Handle</label><input type="text" id="pwHandle" required maxlength="200" placeholder="ciunas.bsky.social" spellcheck="false"></div>'+
             '<div class="field"><label for="pwPass">App password</label><input type="password" id="pwPass" required maxlength="40" placeholder="abcd-efgh-ijkl-mnop" spellcheck="false"></div></div>'+
             '<div class="actions"><button class="btn primary sm" type="submit">Connect</button><button class="btn ghost sm" type="button" id="pwCancel">Cancel</button></div></form>';
@@ -2527,7 +2527,7 @@ function socialPostView(pid){
           (accounts.length ? accounts.map(function(a){ return '<button type="button" data-pick="'+esc(a.platform)+'" aria-pressed="'+(sel().indexOf(a.platform)>-1)+'">'+esc(platName(a.platform))+'</button>' }).join("") : '<span class="hint">No accounts connected for '+esc(brand.name)+'. <a href="#/social/b/'+esc(brand._id)+'">Connect one</a>.</span>')+'</div></div>'+
         '<div class="field"><label for="spText">Caption</label><textarea id="spText" class="code" style="min-height:200px" maxlength="70000">'+esc(p.content)+'</textarea><div class="counts" id="spCounts"></div></div>'+
         '<div class="field"><div class="actions" style="justify-content:space-between"><span class="label">Per platform</span><button class="btn sm" type="button" id="spTweak">Tweak for each platform</button></div><div id="spCaps"></div></div>'+
-        '<div class="field"><label class="check"><input type="checkbox" id="spTrack"'+(p.options.track===false?"":" checked")+'> Track links</label><span class="hint">Links become go.'+esc(S.me.root)+'/l/… so Studio can count clicks and sign-ups from each platform.</span></div>'+
+        '<div class="field"><label class="check"><input type="checkbox" id="spTrack"'+(p.options.track===false?"":" checked")+'> Track links</label><span class="hint">Links become go.'+esc(S.me.root)+'/l/… so Aisling Studio can count clicks and sign-ups from each platform.</span></div>'+
         '<div class="field"><span class="label">Pictures and video</span><div class="media" id="spMedia"></div>'+
           '<div class="actions"><label class="btn sm" style="cursor:pointer"><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" multiple hidden> Upload</label>'+(S.me.files?'<button class="btn sm" type="button" id="spLib">From your files</button>':'')+'</div><span class="hint">'+(S.me.files?'Uploads are saved to your '+esc(brand.name)+' files too.':'Up to 100 MB each.')+' Instagram, TikTok and Pinterest need at least one.</span></div>'+
         '<div id="spExtras" class="stack" style="gap:14px"></div>'+
@@ -2657,7 +2657,7 @@ function socialPostView(pid){
     }).then(function(){
       $("#spDup").onclick=function(){ api("POST","social/posts/"+pid+"/duplicate").then(function(r){ toast("Copy made"); go("#/social/p/"+r.post.id) }).catch(function(e){ toast(e.message,true) }) };
       $("#spDel").onclick=function(){
-        $("#spConfirm").innerHTML='<div class="confirm"><span>Delete this post from Studio?'+(p.status==="published"||p.status==="partial"?' It stays up on the platforms; delete it there if you want it gone.':p.status==="scheduled"?' It won’t go out.':'')+'</span><button class="btn sm danger" type="button" id="sdY">Delete</button><button class="btn sm ghost" type="button" id="sdN">Keep it</button></div>';
+        $("#spConfirm").innerHTML='<div class="confirm"><span>Delete this post from Aisling Studio?'+(p.status==="published"||p.status==="partial"?' It stays up on the platforms; delete it there if you want it gone.':p.status==="scheduled"?' It won’t go out.':'')+'</span><button class="btn sm danger" type="button" id="sdY">Delete</button><button class="btn sm ghost" type="button" id="sdN">Keep it</button></div>';
         $("#sdN").onclick=function(){ $("#spConfirm").innerHTML="" };
         $("#sdY").onclick=function(){ api("DELETE","social/posts/"+pid).then(function(){ toast("Deleted"); go("#/social/b/"+p.profile_id) }).catch(function(e){ toast(e.message,true) }) };
       };
@@ -2689,7 +2689,7 @@ function campaignsView(){
     var v=$("#view"), list=d.campaigns;
     var html=head("Plan","Campaigns","A launch or a push: its emails, posts, forms and pages together, and what they added up to.",'<button class="btn primary" type="button" id="newCamp">New campaign</button>');
     html+='<div id="ncHost"></div>';
-    if(!list.length) html+='<div class="empty"><b>No campaigns yet</b>Make one for your next launch, like “Cipherly autumn”, then add the emails and posts for it. Studio adds up the clicks and sign-ups.</div>';
+    if(!list.length) html+='<div class="empty"><b>No campaigns yet</b>Make one for your next launch, like “Cipherly autumn”, then add the emails and posts for it. Aisling Studio adds up the clicks and sign-ups.</div>';
     var groups=[["Live",function(c){return c.phase==="live"}],["Planning",function(c){return c.phase==="planning"}],["Finished",function(c){return c.phase==="done"}],["Archived",function(c){return c.phase==="archived"}]];
     groups.forEach(function(g){ var l=list.filter(g[1]); if(!l.length) return;
       html+='<section class="panel"><h2 class="sec">'+g[0]+' <span class="hint">'+l.length+'</span></h2><div class="rows">'+l.map(function(c){
@@ -2880,7 +2880,7 @@ function briefView(bid){
         (accounts.length?accounts.map(function(a){ return '<div class="fieldrow" style="align-items:center"><label for="cd-'+esc(a.platform)+'">'+esc(platName(a.platform))+'</label><input type="number" min="0" max="21" id="cd-'+esc(a.platform)+'" data-cad="'+esc(a.platform)+'" value="'+(b.cadence[a.platform]||0)+'" style="width:90px"></div>' }).join(""):'<p class="hint" style="margin:0">Connect accounts on the <a href="#/social/b/'+esc(bid)+'">Social page</a> first.</p>')+
         '<p class="hint" style="margin:0">Claude only uses your posting times, so add enough of them for this.</p></div></section>'+
         (pin?'<section class="panel"><h2 class="sec">Pinterest</h2><div class="pad"><div class="field"><label for="brBoard">Board for new pins</label><select id="brBoard"><option value="">Loading…</option></select></div></div></section>':'')+
-        '<section class="panel"><h2 class="sec">Ask Claude</h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">In Claude, with Studio connected, try:</p><p style="margin:0">“Read the '+esc(brand.name)+' brief in Studio and draft next week’s posts.”</p><p style="margin:0">“Look at my last 20 '+esc(brand.name)+' posts and fill in the brief.”</p></div></section></div></div>';
+        '<section class="panel"><h2 class="sec">Ask Claude</h2><div class="pad stack" style="gap:8px"><p class="hint" style="margin:0">In Claude, with Aisling Studio connected, try:</p><p style="margin:0">“Read the '+esc(brand.name)+' brief in Aisling Studio and draft next week’s posts.”</p><p style="margin:0">“Look at my last 20 '+esc(brand.name)+' posts and fill in the brief.”</p></div></section></div></div>';
     v.innerHTML=html;
     var links=(b.links||[]).slice();
     var save=saver($("#brSave"), function(x){ return api("PUT","social/brands/"+bid+"/brief",x) });
@@ -2910,11 +2910,11 @@ function settingsView(){
     var s=r[0].settings, ev=r[1], zr=r[2], apps=r[3].apps, v=$("#view"), dbl=s.double_optin==="1";
     var evName={"email.bounced":"Bounced","email.complained":"Marked as spam","email.failed":"Couldn’t send","email.suppressed":"On do-not-send list"};
     var hooks = ev.connected
-      ? '<div class="pad stack" style="gap:10px"><p style="margin:0"><span class="chip sent">Connected</span> Studio stops emailing addresses that bounce or mark you as spam, and takes them out of automations.</p>'+
+      ? '<div class="pad stack" style="gap:10px"><p style="margin:0"><span class="chip sent">Connected</span> Aisling Studio stops emailing addresses that bounce or mark you as spam, and takes them out of automations.</p>'+
         '<p class="hint" style="margin:0">'+ev.bounced+' bounced · '+ev.complained+' marked as spam · '+(ev.lastEvent?'last update '+fmtDate(ev.lastEvent,true):'no updates from Resend yet (they arrive after your next send)')+'</p></div>'+
         (ev.recent.length ? '<div class="tablewrap"><table><tbody>'+ev.recent.map(function(e){ return '<tr><td>'+esc(e.email||"—")+'<span class="sub">'+esc(e.detail||"")+'</span></td><td>'+esc(evName[e.type]||e.type)+'</td><td class="r mono">'+fmtDate(e.created_at,true)+'</td></tr>' }).join("")+'</tbody></table></div>' : '')+
         '<div class="pad"><button class="btn sm ghost" type="button" id="whReplace">Replace the signing secret</button><div id="whManual" hidden></div></div>'
-      : '<div class="pad stack" style="gap:12px"><p style="margin:0">Let Resend tell Studio when an email bounces or someone marks it as spam, so Studio stops emailing them. This protects your sending reputation.</p>'+
+      : '<div class="pad stack" style="gap:12px"><p style="margin:0">Let Resend tell Aisling Studio when an email bounces or someone marks it as spam, so Aisling Studio stops emailing them. This protects your sending reputation.</p>'+
         '<div class="actions"><button class="btn primary" type="button" id="whAuto">Connect automatically</button></div><div id="whManual"></div></div>';
     v.innerHTML=head("Workspace","Settings","How your emails and signup forms introduce you.")+
       '<div class="grid2"><form class="form panel" id="setForm" autocomplete="off"><h2 class="sec">Sender <span class="saving" id="setSave">Saved</span></h2>'+
@@ -2924,25 +2924,25 @@ function settingsView(){
       '<div class="field"><label for="sAddr">Postal address</label><input type="text" id="sAddr" data-k="postal_address" maxlength="200" value="'+esc(s.postal_address)+'"><span class="hint">Marketing email law (GDPR, CAN-SPAM) expects a way to reach you. It sits small in every email footer. A PO box or business address is fine.</span></div>'+
       '<div class="field"><label for="sTz">Your time zone</label><select id="sTz" data-k="timezone">'+(function(){ var zones=[]; try{ zones=Intl.supportedValuesOf("timeZone") }catch(e){ zones=["Europe/Madrid","Europe/Dublin","Europe/London","UTC"] } if(zones.indexOf(s.timezone)<0) zones.unshift(s.timezone); return zones.map(function(z){ return '<option'+(z===s.timezone?" selected":"")+'>'+esc(z)+'</option>' }).join("") })()+'</select><span class="hint">Posting times for social brands use this.</span></div>'+
       '<h2 class="sec">Signup forms</h2>'+
-      '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
+      '<div class="field"><label for="sConsent">Consent line</label><textarea id="sConsent" data-k="consent_text" maxlength="300">'+esc(s.consent_text)+'</textarea><span class="hint">People must tick this to sign up. Aisling Studio keeps the wording and the time they agreed, which is your GDPR record.</span></div>'+
       '<div class="actions"><button type="button" class="switch" role="switch" id="sDbl" aria-checked="'+dbl+'" aria-labelledby="sDblLbl"></button><span id="sDblLbl">Ask new sign-ups to confirm their email</span></div>'+
       '<p class="hint">When this is on, people get a “tap to confirm” email first. Welcome emails and automations start once they tap it. Fewer typos and fake addresses on your lists, at the cost of some people never confirming.</p>'+
       '</form><div class="stack"><section class="panel"><h2 class="sec">Social posting</h2>'+
-        '<div class="pad"><p style="margin:0">Studio posts straight to each platform through its own developer app. Set one up per platform, then connect accounts on the <a href="#/social">Social</a> page.</p></div>'+
+        '<div class="pad"><p style="margin:0">Aisling Studio posts straight to each platform through its own developer app. Set one up per platform, then connect accounts on the <a href="#/social">Social</a> page.</p></div>'+
         '<div class="rows">'+apps.map(function(a){
           var on=a.configured, chip=a.kind==="password"?'<span class="chip sent">No setup needed</span>':on?'<span class="chip sent">Set up</span>':'<span class="chip draft">Not yet</span>';
-          var sub=a.kind==="password"?"Connect with an app password":on?("App "+a.client_id+(a.options.sandbox?" · sandbox":"")):"Needs Studio’s own app";
+          var sub=a.kind==="password"?"Connect with an app password":on?("App "+a.client_id+(a.options.sandbox?" · sandbox":"")):"Needs Aisling Studio’s own app";
           if(a.accounts) sub+=" · "+a.accounts+" account"+(a.accounts===1?"":"s")+(a.needsReconnect?" ("+a.needsReconnect+" to reconnect)":"");
           return '<div class="rowi" style="--pc:var(--'+(on?"moss":"brass")+')"><span class="t">'+esc(a.label)+'<small>'+esc(sub)+'</small></span><span class="meta">'+chip+(a.kind==="oauth"?'<button class="btn sm ghost" type="button" data-app="'+esc(a.platform)+'">'+(on?"Change":"Set up")+'</button>':'')+'</span></div>'+
             '<div id="app-'+esc(a.platform)+'" hidden></div>' }).join("")+'</div>'+
-        '<h2 class="sec">Zernio <span class="hint">Optional. For platforms Studio doesn’t post to itself yet, like LinkedIn and X.</span></h2><div class="pad stack" style="gap:12px">'+
+        '<h2 class="sec">Zernio <span class="hint">Optional. For platforms Aisling Studio doesn’t post to itself yet, like LinkedIn and X.</span></h2><div class="pad stack" style="gap:12px">'+
         (zr.zernio
           ? '<p style="margin:0"><span class="chip sent">Connected</span> Accounts connected through Zernio keep posting through it.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Replace the key</button><div id="zkHost" hidden></div>'
           : '<p class="hint" style="margin:0">Not connected. First 2 accounts free, then $6 a month each.</p><button class="btn sm ghost" type="button" id="zkReplace" style="align-self:flex-start">Add a Zernio key</button><div id="zkHost" hidden></div>')+
         '</div></section><section class="panel"><h2 class="sec">Connect Claude</h2><div class="pad stack" style="gap:12px">'+
         '<p style="margin:0">Let Claude draft posts and emails, add files and read your results. It can only save drafts: nothing goes out until you send it here.</p>'+
         '<ol class="steps"><li>In Claude, open <b>Settings → Connectors</b> and choose <b>Add custom connector</b>.</li>'+
-        '<li>Name it <b>Studio</b> and paste this address:<div class="affix" style="margin-top:6px"><input type="text" id="mcpUrl" readonly value="https://studio.'+esc(S.me.root)+'/mcp"><button class="btn sm" type="button" id="mcpCopy" style="border:0;border-left:1px solid var(--line)">Copy</button></div></li>'+
+        '<li>Name it <b>Aisling Studio</b> and paste this address:<div class="affix" style="margin-top:6px"><input type="text" id="mcpUrl" readonly value="https://studio.'+esc(S.me.root)+'/mcp"><button class="btn sm" type="button" id="mcpCopy" style="border:0;border-left:1px solid var(--line)">Copy</button></div></li>'+
         '<li>Click <b>Connect</b>, sign in here with your email link if asked, and press <b>Allow</b>.</li></ol></div></section>'+
         '<section class="panel"><h2 class="sec">Bounces and spam reports</h2>'+hooks+'</section>'+
       '<section class="panel"><h2 class="sec">Connections</h2><div class="rows">'+
@@ -2975,7 +2975,7 @@ function settingsView(){
     var rp=$("#whReplace"); if(rp) rp.onclick=function(){ this.hidden=true; manual($("#whManual")) };
     function zkForm(host){
       host.hidden=false;
-      host.innerHTML='<ol class="steps"><li>Sign up at <a href="https://zernio.com" target="_blank" rel="noopener">zernio.com</a> with '+esc(S.me.email)+'.</li><li>In Zernio, open <b>API keys</b> and create one called “Studio”.</li>'+
+      host.innerHTML='<ol class="steps"><li>Sign up at <a href="https://zernio.com" target="_blank" rel="noopener">zernio.com</a> with '+esc(S.me.email)+'.</li><li>In Zernio, open <b>API keys</b> and create one called “Aisling Studio”.</li>'+
         '<li>Paste it here (it starts with sk_):<div class="actions" style="margin-top:6px"><label class="sr" for="zkKey">Zernio API key</label><input type="password" id="zkKey" autocomplete="off" spellcheck="false" placeholder="sk_…" style="flex:1 1 220px;width:auto"><button class="btn primary" type="button" id="zkSave">Save</button></div></li></ol>';
       $("#zkSave").onclick=function(){ var b=this, val=$("#zkKey").value.trim(); if(!val){ toast("Paste the key first.",true); return } b.disabled=true; b.textContent="Checking…";
         api("PUT","settings/zernio-key",{key:val}).then(function(){ S.social=null; toast("Social posting connected"); route() }).catch(function(e){ b.disabled=false; b.textContent="Save"; toast(e.message,true) }) };

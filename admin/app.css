@@ -56,7 +56,7 @@ svg{fill:none;stroke:currentColor;stroke-width:1.5}
 .mark i:nth-child(2){background:var(--coral)}
 .mark i:nth-child(3){background:var(--s-brass)}
 .brandtext{display:flex;flex-direction:column;line-height:1.15}
-.wordmark{font-family:var(--f-serif);font-weight:600;font-size:20px;letter-spacing:.04em;text-transform:uppercase}
+.wordmark{font-family:var(--f-serif);font-weight:600;font-size:16px;white-space:nowrap;letter-spacing:.04em;text-transform:uppercase}
 .domain{font-size:11px;color:var(--nav-t3)}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav>a,.navlink{display:flex;align-items:center;gap:10px;padding:8px 10px;text-decoration:none;font-size:13.5px;color:var(--nav-t2)}

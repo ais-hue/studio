@@ -134,11 +134,11 @@ export async function finishBatch(env: Env, batchId: string, summary: string): P
   const items = results.map((p) => `<li style="margin:0 0 8px"><b>${esc(when(p.planned_at))}</b> · ${esc(JSON.parse(p.targets || "[]").map((x: any) => PLATFORMS[x.platform]?.name || x.platform).join(", "))}<br><span style="color:#4B5367">${esc(String(p.content || "").split("\n")[0].slice(0, 120))}</span></li>`).join("");
   const n = results.length;
   const r = await sendTransactional(env, {
-    to, from: `Studio <${settings.sender_email}>`,
+    to, from: `Aisling Studio <${settings.sender_email}>`,
     subject: `${n} ${brand} draft${n === 1 ? "" : "s"} ready to review`,
     text: `${n} draft${n === 1 ? "" : "s"} for ${brand} ${n === 1 ? "is" : "are"} waiting for you.\n\n${summary ? summary + "\n\n" : ""}Review them: ${link}\n\nNothing goes out until you approve it.`,
     html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#0E1628;max-width:560px">
-<p style="font-family:Georgia,serif;font-size:20px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 16px">Studio</p>
+<p style="font-family:Georgia,serif;font-size:20px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 16px">Aisling Studio</p>
 <p style="margin:0 0 12px"><b>${n} ${esc(brand)} draft${n === 1 ? "" : "s"}</b> ${n === 1 ? "is" : "are"} waiting for you.</p>
 ${summary ? `<p style="margin:0 0 14px;color:#4B5367">${esc(summary)}</p>` : ""}<ul style="padding-left:18px;margin:0 0 18px">${items}</ul>
 <p style="margin:0 0 18px"><a href="${esc(link)}" style="background:#EC7650;color:#0E1628;padding:11px 18px;text-decoration:none;font-weight:bold;display:inline-block">Review drafts</a></p>

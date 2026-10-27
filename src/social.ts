@@ -159,11 +159,11 @@ export async function connectMode(env: Env, platform: string, profileId: string)
 }
 
 export async function connectUrl(env: Env, platform: string, profileId: string, back: string): Promise<string> {
-  if (!PLATFORMS[platform]) throw new HttpError(400, "Studio doesn’t post to that platform yet.");
+  if (!PLATFORMS[platform]) throw new HttpError(400, "Aisling Studio doesn’t post to that platform yet.");
   const mode = await connectMode(env, platform, profileId);
   if (mode === "studio") return startConnect(env, platform, profileId, new URL(back).origin);
   if (mode === "password") throw new HttpError(400, `${PLATFORMS[platform].name} connects with an app password.`);
-  if (mode === "none") throw new HttpError(409, `Set up Studio’s ${PLATFORMS[platform].name} app in Settings to connect it.`);
+  if (mode === "none") throw new HttpError(409, `Set up Aisling Studio’s ${PLATFORMS[platform].name} app in Settings to connect it.`);
   if (await mock(env)) {
     const acc = { _id: id("ac_"), platform, username: `ciunas_${platform}`, displayName: "Ciúnas", profileId, isActive: true };
     mockAccounts.set(acc._id, acc);
@@ -222,7 +222,7 @@ export async function uploadMedia(env: Env, req: Request): Promise<{ url: string
   }
   if (await mock(env)) return { url: `https://picsum.photos/seed/${encodeURIComponent(name)}/1080/1080`, type: kind, name };
   const p = await call(env, "POST", "/media/presign", { filename: name, contentType: type, size: bytes.byteLength });
-  if (!p.uploadUrl || !p.publicUrl) throw new HttpError(502, "Zernio didn’t give Studio somewhere to upload the file.");
+  if (!p.uploadUrl || !p.publicUrl) throw new HttpError(502, "Zernio didn’t give Aisling Studio somewhere to upload the file.");
   const put = await fetch(p.uploadUrl, { method: "PUT", headers: { "content-type": type }, body: bytes });
   if (!put.ok) throw new HttpError(502, `The upload didn’t go through (${put.status}). Try again.`);
   return { url: String(p.publicUrl), type: kind, name };
@@ -425,7 +425,7 @@ async function retry(env: Env, p: SocialPost): Promise<void> {
   const zBad = zr.filter((r) => r.error || r.status === "failed" || r.status === "error");
   const zOut = zr.filter((r) => !r.error && (r.url || r.status === "published"));
   const zFailed = !!p.zernio_id && (zBad.length > 0 || ["failed", "partial", "error"].includes(String((p as any).zernio_status || "")));
-  if (!direct && !zFailed) throw new HttpError(409, "Studio found nothing to try again on this post. Duplicate it and post the copy instead.");
+  if (!direct && !zFailed) throw new HttpError(409, "Aisling Studio found nothing to try again on this post. Duplicate it and post the copy instead.");
   if (zFailed) {
     if (await mock(env)) {
       const done = zr.map((r) => ({ ...r, status: "published", error: null }));
@@ -551,9 +551,9 @@ export function applyEdit(p: SocialPost, e: BulkEdit, accounts: SocialAccount[],
       moved.push(PLATFORMS[t.platform]?.name || t.platform);
       return { platform: t.platform, accountId: own._id };
     });
-    if (moved.length) notes.push(`Now posts through Studio for ${moved.join(", ")}.`);
+    if (moved.length) notes.push(`Now posts through Aisling Studio for ${moved.join(", ")}.`);
     if (moved.includes(PLATFORMS.pinterest.name)) notes.push("Check the Pinterest board on these posts: boards picked through Zernio may not match.");
-    if (left.length) notes.push(`${left.join(", ")} isn’t connected through Studio for this brand yet, so it stays on Zernio.`);
+    if (left.length) notes.push(`${left.join(", ")} isn’t connected through Aisling Studio for this brand yet, so it stays on Zernio.`);
   }
   for (const pl of e.platforms_remove || []) targets = targets.filter((t) => t.platform !== pl);
   for (const pl of e.platforms_add || []) {

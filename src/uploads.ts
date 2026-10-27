@@ -58,7 +58,7 @@ export async function handleUploadLink(req: Request, env: Env, path: string): Pr
   const [, , secret, part, n] = path.split("/");
   const l = await linkFor(env, secret || "");
   if (!l) {
-    if (req.method === "GET") return page("Link expired", `<span class="eyebrow">Upload</span><h1>This upload link has expired</h1><p>Ask Claude for a new one, or upload in Studio’s Files page.</p>`, 404, { "referrer-policy": "no-referrer" });
+    if (req.method === "GET") return page("Link expired", `<span class="eyebrow">Upload</span><h1>This upload link has expired</h1><p>Ask Claude for a new one, or upload in Aisling Studio’s Files page.</p>`, 404, { "referrer-policy": "no-referrer" });
     return json({ error: "This upload link has expired or doesn’t exist." }, 404);
   }
   try {
@@ -93,9 +93,9 @@ export async function handleUploadLink(req: Request, env: Env, path: string): Pr
 
 function uploadPage(l: Link): Response {
   const mins = Math.max(1, Math.round((l.expires_at - now()) / 60000));
-  return page("Upload", `<span class="eyebrow">Upload to Studio</span><h1>Drop your files here</h1>
+  return page("Upload", `<span class="eyebrow">Upload to Aisling Studio</span><h1>Drop your files here</h1>
 ${l.note ? `<p>${esc(l.note)}</p>` : ""}
-<p>They go into your Studio files${l.folder ? ` in <b>${esc(l.folder)}</b>` : ""}. Videos up to 4 GB. This link works for another ${mins} minute${mins === 1 ? "" : "s"}.</p>
+<p>They go into your Aisling Studio files${l.folder ? ` in <b>${esc(l.folder)}</b>` : ""}. Videos up to 4 GB. This link works for another ${mins} minute${mins === 1 ? "" : "s"}.</p>
 <label id="drop" style="border:1px dashed var(--line);padding:26px 14px;text-align:center;cursor:pointer;display:block;text-transform:none;letter-spacing:0;font-size:14px;font-weight:400;color:var(--t2)">
 <input type="file" id="f" multiple accept="video/*,image/*,application/pdf,audio/*" style="position:absolute;opacity:0;width:1px;height:1px">
 <b style="color:var(--t1)">Choose files</b><br><span class="fine">or drag them in</span></label>

@@ -61,10 +61,10 @@ export async function uploadSmall(env: Env, req: Request, o: { folder?: string; 
   const m = meta(req);
   if (o.folder !== undefined) m.folder = o.folder;
   if (!ALLOWED.test(m.type)) m.type = typeFromName(m.name) || m.type;
-  if (!ALLOWED.test(m.type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!ALLOWED.test(m.type)) throw new HttpError(400, "Aisling Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   const len = Number(req.headers.get("content-length")) || 0;
   if (!req.body || !len) throw new HttpError(400, "That file is empty.");
-  if (len > 95 * 1024 * 1024) throw new HttpError(413, "That file is too big for one go. Refresh Studio and try again.");
+  if (len > 95 * 1024 * 1024) throw new HttpError(413, "That file is too big for one go. Refresh Aisling Studio and try again.");
   const key = newKey(m.name, m.type);
   const obj = await bucket(env).put(key, req.body, { httpMetadata: { contentType: m.type, cacheControl: "public, max-age=31536000, immutable" } });
   const t = now(), fid = id("f_");
@@ -101,7 +101,7 @@ export function imageDims(b: Uint8Array): { w: number; h: number } | null {
 /** Save bytes Studio already has (from Claude, or fetched from a link) as a library file. */
 export async function storeBytes(env: Env, bytes: Uint8Array, o: { name: string; type: string; folder?: string; alt?: string }): Promise<FileRow> {
   const type = (ALLOWED.test(o.type.toLowerCase()) ? o.type : typeFromName(o.name) || o.type).toLowerCase();
-  if (!ALLOWED.test(type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!ALLOWED.test(type)) throw new HttpError(400, "Aisling Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   if (!bytes.byteLength) throw new HttpError(400, "That file is empty.");
   const key = newKey(o.name, type);
   await bucket(env).put(key, bytes, { httpMetadata: { contentType: type, cacheControl: "public, max-age=31536000, immutable" } });
@@ -115,7 +115,7 @@ export async function storeBytes(env: Env, bytes: Uint8Array, o: { name: string;
 /** Stream a large download straight into the library without holding it in memory. */
 export async function storeStream(env: Env, body: ReadableStream, len: number, o: { name: string; type: string; folder?: string; alt?: string; link?: string }): Promise<FileRow> {
   const type = (ALLOWED.test(o.type) ? o.type : typeFromName(o.name) || o.type).toLowerCase();
-  if (!ALLOWED.test(type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!ALLOWED.test(type)) throw new HttpError(400, "Aisling Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   if (!(len > 0) || len > MAX_SIZE) throw new HttpError(413, "That file is too big, or its size is unknown.");
   const key = newKey(o.name, type);
   const { readable, writable } = new FixedLengthStream(len);
@@ -133,7 +133,7 @@ export async function startBig(env: Env, req: Request, o: { folder?: string; lin
   const m = meta(req);
   if (o.folder !== undefined) m.folder = o.folder;
   if (!ALLOWED.test(m.type)) m.type = typeFromName(m.name) || m.type;
-  if (!ALLOWED.test(m.type)) throw new HttpError(400, "Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
+  if (!ALLOWED.test(m.type)) throw new HttpError(400, "Aisling Studio stores images, videos, PDFs and audio. That file type isn’t one of them.");
   if (!m.size) throw new HttpError(400, "That file is empty.");
   if (m.size > MAX_SIZE) throw new HttpError(413, "That file is over 4 GB. Make it smaller first.");
   const key = newKey(m.name, m.type);

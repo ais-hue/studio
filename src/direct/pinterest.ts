@@ -73,7 +73,7 @@ export const pinterest: Provider = {
   platform: "pinterest", label: "Pinterest", kind: "oauth",
   setup: {
     console: "https://developers.pinterest.com/apps/",
-    note: "A Pinterest developer app. Scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read. With trial access, tick “Sandbox” and paste a sandbox token (the app’s page → Generate token → Sandbox): pins then only appear in Pinterest’s sandbox. Request Standard access with a short video of connecting and pinning from Studio.",
+    note: "A Pinterest developer app. Scopes: boards:read, boards:write, pins:read, pins:write, user_accounts:read. With trial access, tick “Sandbox” and paste a sandbox token (the app’s page → Generate token → Sandbox): pins then only appear in Pinterest’s sandbox. Request Standard access with a short video of connecting and pinning from Aisling Studio.",
     needsSecret: true,
   },
   authorize: (app, redirect, state) =>
@@ -106,7 +106,7 @@ export const pinterest: Provider = {
         if (video) {
           if (job.media.length > 1) throw new Permanent("A Pinterest video pin holds one video.");
           const { size } = await sizeOf(job.env, video.url);
-          if (size > 95 * 1024 * 1024) throw new Permanent("Studio can send Pinterest videos up to 95 MB for now.");
+          if (size > 95 * 1024 * 1024) throw new Permanent("Aisling Studio can send Pinterest videos up to 95 MB for now.");
           const reg = await pin<any>(app, acc, "/media", { method: "POST", body: JSON.stringify({ media_type: "video" }) });
           return { step: "upload", data: { media_id: String(reg.media_id), upload_url: reg.upload_url, params: reg.upload_parameters || {} } };
         }

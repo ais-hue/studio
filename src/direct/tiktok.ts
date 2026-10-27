@@ -21,7 +21,7 @@ const tkError = (status: number, body: any): Error | null => {
   if (code === "access_token_invalid" || code === "scope_not_authorized" || status === 401) return new Reconnect("TikTok sign-in has expired or lost permission. Connect the account again.");
   if (code === "rate_limit_exceeded" || status === 429) return new Retry(msg, 5 * 60_000);
   if (code === "spam_risk_too_many_posts" || code === "spam_risk_user_banned_from_posting") return new Permanent("TikTok has hit its daily posting limit for this account. Try again tomorrow.");
-  if (code === "unaudited_client_can_only_post_to_private_accounts") return new Permanent("TikTok only lets Studio post to private accounts until its app passes TikTok’s audit. Set the TikTok account to private, or wait for the audit.");
+  if (code === "unaudited_client_can_only_post_to_private_accounts") return new Permanent("TikTok only lets Aisling Studio post to private accounts until its app passes TikTok’s audit. Set the TikTok account to private, or wait for the audit.");
   if (code === "url_ownership_unverified") return new Permanent(`TikTok photo posts need files.<your domain> verified as a URL prefix in the TikTok developer portal.`);
   if (status >= 500 || code === "internal_error") return new Retry(msg, 2 * 60_000);
   return new Permanent(msg);

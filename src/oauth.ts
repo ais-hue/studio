@@ -30,7 +30,7 @@ export function studioProvider(env: Env, studio: Studio): OAuthProvider<Env> {
       clientRegistrationEndpoint: "/oauth/register",
       clientIdMetadataDocumentEnabled: true,
       scopesSupported: [SCOPE],
-      resourceMetadata: { resource: `${origin}/mcp`, authorization_servers: [origin], scopes_supported: [SCOPE], resource_name: "Studio" },
+      resourceMetadata: { resource: `${origin}/mcp`, authorization_servers: [origin], scopes_supported: [SCOPE], resource_name: "Aisling Studio" },
       accessTokenTTL: 3600,
     } as any);
     providers.set(origin, p);
@@ -50,7 +50,7 @@ function consentHtml(clientName: string, clientId: string, redirectHost: string,
   const local = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/.test(redirectHost);
   const cimd = clientId.startsWith("https://");
   const publisher = cimd ? `Published by <b>${esc(new URL(clientId).hostname)}</b>.` : "This app registered itself, so its name isn’t verified.";
-  return `<span class="eyebrow">Connect</span><h1>Let ${esc(clientName)} use Studio?</h1>
+  return `<span class="eyebrow">Connect</span><h1>Let ${esc(clientName)} use Aisling Studio?</h1>
 <p>${publisher} Access goes to <b>${esc(redirectHost)}</b>.</p>
 ${local ? `<p><b>This sends access to an app on your computer</b>, such as Claude Code. Continue only if you just started connecting from it.</p>` : ""}
 <div><p style="margin:0 0 6px;color:var(--t1);font-weight:600">It will be able to</p><ul style="margin:0;padding-left:18px;color:var(--t2)">${CAN.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>

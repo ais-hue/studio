@@ -37,7 +37,7 @@ export async function sessionEmail(req: Request, env: Env): Promise<string | nul
 
 export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}): Response {
   return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="robots" content="noindex"><title>${esc(title)} · Studio</title>
+<meta name="robots" content="noindex"><title>${esc(title)} · Aisling Studio</title>
 <link rel="stylesheet" href="/__proof/fonts/studio-fonts.css">
 <style>
 :root{color-scheme:light;--bg:#F5F5F2;--card:#FFFFFF;--line:#E3E3DE;--t1:#0E1628;--t2:#4B5367;--t3:#858B99;--coral:#EC7650;--sage:#4A6B52}
@@ -63,12 +63,12 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(-
 .fine{font-size:12px;color:var(--t3)}
 @media (max-width:760px){body{grid-template-columns:1fr}.side{padding:20px 16px}.side .tag{display:none}}
 </style></head><body>
-<aside class="side"><div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span><span class="word">Studio</span><br><small>aisling.online</small></span></div><small class="tag">Sites, contacts and email for everything you make.</small></aside>
+<aside class="side"><div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span><span class="word">Aisling Studio</span><br><small>aisling.online</small></span></div><small class="tag">Sites, contacts and email for everything you make.</small></aside>
 <main><div class="card">${body}</div></main></body></html>`, status, { "cache-control": "no-store", "x-frame-options": "DENY", ...headers });
 }
 
 export function loginPage(message = ""): Response {
-  return page("Sign in", `<span class="eyebrow">Studio</span><h1>Sign in</h1>
+  return page("Sign in", `<span class="eyebrow">Aisling Studio</span><h1>Sign in</h1>
 <p>We’ll email you a link. No password needed.</p>
 <form method="post" action="/auth/request" style="display:flex;flex-direction:column;gap:12px">
 <div style="display:flex;flex-direction:column;gap:6px"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254" autofocus></div>
@@ -80,13 +80,13 @@ export async function handleAuth(req: Request, env: Env, ctx: ExecutionContext):
   const url = new URL(req.url);
   const p = url.pathname;
 
-  if (p === "/login" && req.method === "GET") return loginPage(url.searchParams.get("connect") ? "Sign in to connect Claude to Studio." : "");
+  if (p === "/login" && req.method === "GET") return loginPage(url.searchParams.get("connect") ? "Sign in to connect Claude to Aisling Studio." : "");
 
   if (p === "/auth/request" && req.method === "POST") {
     const form = await req.formData().catch(() => null);
     const email = String(form?.get("email") || "").trim().toLowerCase();
     const done = page("Check your email", `<span class="eyebrow">Almost there</span><h1>Check your email</h1>
-<p>If <b>${esc(email)}</b> can sign in to Studio, a link is on its way. It works once and expires in 15 minutes.</p>
+<p>If <b>${esc(email)}</b> can sign in to Aisling Studio, a link is on its way. It works once and expires in 15 minutes.</p>
 <p class="fine">Nothing arrived? Check spam, or <a href="/login">try again</a>.</p>`);
     if (!isEmail(email) || !allowed(env, email)) return done;
     const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM login_tokens WHERE email = ? AND created_at > ?").bind(email, now() - LINK_TTL).first<{ n: number }>();
@@ -94,17 +94,17 @@ export async function handleAuth(req: Request, env: Env, ctx: ExecutionContext):
     const raw = token();
     await env.DB.prepare("INSERT INTO login_tokens (hash, email, expires_at, created_at) VALUES (?, ?, ?, ?)").bind(await sha256(raw), email, now() + LINK_TTL, now()).run();
     const link = `${url.origin}/auth/verify?t=${encodeURIComponent(raw)}`;
-    if (env.ROOT_DOMAIN === "localhost") console.log("Studio sign-in link:", link); // local testing only
+    if (env.ROOT_DOMAIN === "localhost") console.log("Aisling Studio sign-in link:", link); // local testing only
     const settings = await getSettings(env);
     ctx.waitUntil(sendTransactional(env, {
       to: email,
-      from: `Studio <${settings.sender_email}>`,
-      subject: "Your Studio sign-in link",
-      text: `Sign in to Studio:\n${link}\n\nThis link works once and expires in 15 minutes. If you didn’t ask for it, you can ignore this email.`,
+      from: `Aisling Studio <${settings.sender_email}>`,
+      subject: "Your Aisling Studio sign-in link",
+      text: `Sign in to Aisling Studio:\n${link}\n\nThis link works once and expires in 15 minutes. If you didn’t ask for it, you can ignore this email.`,
       html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0E1628;max-width:480px">
-<p style="font-family:Georgia,serif;font-size:20px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 16px">Studio</p>
+<p style="font-family:Georgia,serif;font-size:20px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 16px">Aisling Studio</p>
 <p>Here’s your sign-in link. It works once and expires in 15 minutes.</p>
-<p style="margin:24px 0"><a href="${esc(link)}" style="background:#EC7650;color:#0E1628;padding:12px 18px;text-decoration:none;font-weight:bold;display:inline-block">Sign in to Studio</a></p>
+<p style="margin:24px 0"><a href="${esc(link)}" style="background:#EC7650;color:#0E1628;padding:12px 18px;text-decoration:none;font-weight:bold;display:inline-block">Sign in to Aisling Studio</a></p>
 <p style="font-size:12px;color:#4B5367">If you didn’t ask for this, you can ignore it. Nobody can sign in without this link.</p></div>`,
     }).then((r) => { if (!r.ok) console.error("Sign-in email failed:", r.error); }));
     return done;
@@ -117,7 +117,7 @@ export async function handleAuth(req: Request, env: Env, ctx: ExecutionContext):
     const bad = !row || row.used_at || row.expires_at < now() || !allowed(env, row.email);
     if (bad) return page("Link expired", `<span class="eyebrow">Sign in</span><h1>That link has expired</h1><p>Sign-in links work once and last 15 minutes.</p><a class="btn" href="/login">Send a new link</a>`, 400);
     if (req.method !== "POST") {
-      return page("Sign in", `<span class="eyebrow">Sign in</span><h1>Continue to Studio</h1><p>Signing in as <b>${esc(row!.email)}</b>.</p>
+      return page("Sign in", `<span class="eyebrow">Sign in</span><h1>Continue to Aisling Studio</h1><p>Signing in as <b>${esc(row!.email)}</b>.</p>
 <form method="post"><button type="submit">Sign in</button></form>`);
     }
     const r = await env.DB.prepare("UPDATE login_tokens SET used_at = ? WHERE hash = ? AND used_at IS NULL").bind(now(), hash).run();

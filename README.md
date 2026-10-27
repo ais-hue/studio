@@ -1,4 +1,4 @@
-# Studio
+# Aisling Studio
 
 Aisling's standalone marketing studio: sites on every `*.aisling.online` subdomain, pages, signup forms, contacts and lists, email campaigns, automations and social posting. Runs on Cloudflare Workers with a D1 database; email goes out through Resend.
 

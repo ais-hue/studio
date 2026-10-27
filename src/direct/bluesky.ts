@@ -33,7 +33,7 @@ async function resolvePds(handle: string): Promise<{ did: string; pds: string }>
   const did = h.startsWith("did:") ? h
     : String((await call<any>("Bluesky", `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(h)}`, {}, xrpcError)).did);
   const docUrl = did.startsWith("did:plc:") ? `https://plc.directory/${did}` : did.startsWith("did:web:") ? `https://${did.slice(8)}/.well-known/did.json` : "";
-  if (!docUrl) throw new Permanent("Studio can’t work out where that Bluesky account lives.");
+  if (!docUrl) throw new Permanent("Aisling Studio can’t work out where that Bluesky account lives.");
   const doc = await call<any>("Bluesky", docUrl, {}, xrpcError);
   const svc = (doc.service || []).find((s: any) => String(s.id).endsWith("#atproto_pds"));
   if (!svc?.serviceEndpoint) throw new Permanent("That Bluesky account has no server listed.");

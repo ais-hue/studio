@@ -112,7 +112,7 @@ export default {
       // A site's own domain (ciunas.app). Needs a Worker route on that domain's Cloudflare zone.
       const custom = await handleCustomHost(req, env, ctx, host);
       if (custom) return custom;
-      return new Response("This domain isn’t connected to a Studio site yet.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+      return new Response("This domain isn’t connected to an Aisling Studio site yet.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       console.error(e);
